@@ -250,9 +250,11 @@ def fetch_existing_ids(token, base_token, table_id):
     ids = set()
     page_token = ""
     while True:
+        # 注：不传 field_names——飞书 API 当前版本对该参数（含中文）返回
+        # InvalidFieldNames(1254024)，改为读取全部字段并从记录中提取消息ID。
         url = (
             f"{FEISHU_HOST}/open-apis/bitable/v1/apps/{base_token}/tables/{table_id}/records"
-            f"?page_size=500&field_names={urllib.parse.quote('消息ID')}"
+            f"?page_size=500"
         )
         if page_token:
             url += f"&page_token={urllib.parse.quote(page_token)}"
