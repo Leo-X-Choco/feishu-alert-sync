@@ -1,0 +1,58 @@
+name: sync-feishu-alerts
+
+# 触发方式：
+# 1. 定时触发（默认每 15 分钟）
+#    - 若仓库为「公共仓库」：Actions 额度无限，可改成 */5 每 5 分钟
+#    - 若仓库为「私有仓库」：免费额度约 2000 分钟/月，建议 */30（每 30 分钟）
+# 2. 手动触发：仓库 Actions 页面 -> 本工作流 -> Run workflow
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Sync alerts to Bitable
+        env:
+          FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+          FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+          FEISHU_BASE_TOKEN: ${{ secrets.FEISHU_BASE_TOKEN }}
+          FEISHU_TABLE_ID: ${{ secrets.FEISHU_TABLE_ID }}
+          FEISHU_CHAT_ID: ${{ secrets.FEISHU_CHAT_ID }}
+          FEISHU_ALERT_WEBHOOK: ${{ secrets.FEISHU_ALERT_WEBHOOK }}
+          LOOKBACK_HOURS: "24"
+        run: python sync_alerts.py
+
+  # 兜底告警：sync 失败时（包括脚本整体崩溃、超时等未触发脚本内告警的场景），
+  # 由 GitHub Actions 直接发飞书群机器人消息
+  notify-failure:
+    needs: sync
+    if: failure()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Feishu failure alert
+        env:
+          FEISHU_ALERT_WEBHOOK: ${{ secrets.FEISHU_ALERT_WEBHOOK }}
+        run: |
+          if [ -z "$FEISHU_ALERT_WEBHOOK" ]; then
+            echo "未配置 FEISHU_ALERT_WEBHOOK，跳过兜底告警（请配置后启用）"
+            exit 0
+          fi
+          TS=$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S')
+          TEXT="🚨【预警同步失败·兜底提醒】 时间：${TS} 请检查运行日志：https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          PAYLOAD=$(python3 -c "import json,sys;print(json.dumps({'msg_type':'text','content':{'text':sys.argv[1]}},ensure_ascii=False))" "$TEXT")
+          curl -sS -X POST -H "Content-Type: application/json" -d "$PAYLOAD" "$FEISHU_ALERT_WEBHOOK"
