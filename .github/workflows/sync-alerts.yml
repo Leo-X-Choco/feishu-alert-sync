@@ -1,13 +1,11 @@
 name: sync-feishu-alerts
 
 # 触发方式：
-# 1. 定时触发（默认每天 1 次，北京时间 00:00 = UTC 16:00）
-#    - 已改为每日一次以节省 Actions 额度；回看窗口 48h，防止某天运行失败漏抓预警
-#    - 如需更频繁，改回 */15（公共仓库额度无限）或 */30（私有仓库省钱）
+# 1. 定时触发（每 10 分钟一次，cron: "*/10 * * * *"）
 # 2. 手动触发：仓库 Actions 页面 -> 本工作流 -> Run workflow
 on:
   schedule:
-    - cron: "0 16 * * *"
+    - cron: "*/10 * * * *"
   workflow_dispatch:
 
 permissions:
