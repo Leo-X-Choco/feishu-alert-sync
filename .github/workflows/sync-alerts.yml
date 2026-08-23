@@ -1,13 +1,13 @@
 name: sync-feishu-alerts
 
 # 触发方式：
-# 1. 定时触发（默认每 15 分钟）
-#    - 若仓库为「公共仓库」：Actions 额度无限，可改成 */5 每 5 分钟
-#    - 若仓库为「私有仓库」：免费额度约 2000 分钟/月，建议 */30（每 30 分钟）
+# 1. 定时触发（默认每天 1 次，北京时间 00:00 = UTC 16:00）
+#    - 已改为每日一次以节省 Actions 额度；回看窗口 48h，防止某天运行失败漏抓预警
+#    - 如需更频繁，改回 */15（公共仓库额度无限）或 */30（私有仓库省钱）
 # 2. 手动触发：仓库 Actions 页面 -> 本工作流 -> Run workflow
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "0 16 * * *"
   workflow_dispatch:
 
 permissions:
@@ -34,7 +34,7 @@ jobs:
           FEISHU_TABLE_ID: ${{ secrets.FEISHU_TABLE_ID }}
           FEISHU_CHAT_ID: ${{ secrets.FEISHU_CHAT_ID }}
           FEISHU_ALERT_WEBHOOK: ${{ secrets.FEISHU_ALERT_WEBHOOK }}
-          LOOKBACK_HOURS: "24"
+          LOOKBACK_HOURS: "48"
         run: python sync_alerts.py
 
   # 兜底告警：sync 失败时（包括脚本整体崩溃、超时等未触发脚本内告警的场景），
