@@ -374,7 +374,8 @@ def main():
                 "法务类别": f["法务类别"],
                 "置信度": f["置信度"],
                 "理由摘要": f["理由摘要"],
-                "详情链接": f["详情链接"],
+                # 「详情链接」字段为超链接类型(type=15)，必须写对象格式，纯字符串会报 1254068 URLFieldConvFail
+                "详情链接": ({"text": f["详情链接"], "link": f["详情链接"]} if f["详情链接"] else None),
                 "消息ID": mid,
                 "消息链接": f"https://applink.feishu.cn/client/chat/open?openChatId={urllib.parse.quote(chat_id)}&position={mid}",
             }
