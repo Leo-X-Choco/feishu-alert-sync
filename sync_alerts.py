@@ -27,6 +27,7 @@ import os
 import re
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -106,7 +107,7 @@ def build_alert_text(stage, cause, job_url=None):
 
 
 def http_json(method, url, headers=None, payload=None):
-    """发起 HTTP 请求，返回解析后的 JSON。"""
+    """发起 HTTP 请求，返回解析后的 JSON。读超时/网络错误退避重试 1 次。"""
     req = urllib.request.Request(url, method=method)
     req.add_header("Content-Type", "application/json; charset=utf-8")
     for k, v in (headers or {}).items():
@@ -114,12 +115,24 @@ def http_json(method, url, headers=None, payload=None):
     data = None
     if payload is not None:
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    try:
-        with urllib.request.urlopen(req, data=data, timeout=30) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", "ignore")
-        raise LarkError(f"HTTP {e.code}: {body[:500]}") from e
+
+    last_err = None
+    for attempt in range(2):  # 首次 + 1 次重试
+        try:
+            with urllib.request.urlopen(req, data=data, timeout=30) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            # HTTP 状态码错误是明确的业务错误，不重试，直接归类
+            body = e.read().decode("utf-8", "ignore")
+            raise LarkError(f"HTTP {e.code}: {body[:500]}") from e
+        except (TimeoutError, urllib.error.URLError) as e:
+            # 读超时/网络抖动属临时性错误，退避 2 秒后重试 1 次
+            last_err = e
+            if attempt == 0:
+                time.sleep(2)
+                continue
+    # 重试耗尽仍失败，转为 LarkError 以便上层归类到具体阶段
+    raise LarkError(f"请求超时/网络错误（已重试 1 次仍失败）: {last_err}") from last_err
 
 
 def get_tenant_token(app_id, app_secret):
