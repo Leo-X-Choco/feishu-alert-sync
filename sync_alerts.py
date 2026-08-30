@@ -150,6 +150,7 @@ def list_chat_messages(token, chat_id, page_size=50, page_token=None):
         f"{FEISHU_HOST}/open-apis/im/v1/messages"
         f"?container_id_type=chat&container_id={urllib.parse.quote(chat_id)}"
         f"&sort_type=ByCreateTimeDesc&page_size={page_size}"
+        f"&card_msg_content_type=user_card_content"
     )
     if page_token:
         url += f"&page_token={urllib.parse.quote(page_token)}"
@@ -252,34 +253,48 @@ def parse_alert(content_text):
 
 def parse_interactive_card(card):
     """
-    解析 interactive 卡片消息（新版预警格式）。
+    解析原始卡片 JSON（card_msg_content_type=user_card_content 返回的 2.0 结构）。
+    - header.title.content 存标题
+    - elements 里 div.text.content 存 markdown 字段文本（**字段名:** 值）
+    - action.actions[].behaviors[].default_url 存「查看详情」按钮跳转链接
     筛选 title 含"法务/侵权邮件预警"的卡片，返回字段 dict；不符合返回 None。
-    字段值以 "字段名:" text 与 " 值\n" text 交替出现，据此配对。
     """
-    title = card.get("title", "")
+    header = card.get("header", {})
+    title_obj = header.get("title", {})
+    title = title_obj.get("content", "") if isinstance(title_obj, dict) else str(title_obj)
     if "法务/侵权邮件预警" not in title:
         return None
 
-    # 展平所有 text 标签
-    texts = []
-    for group in card.get("elements", []):
-        if isinstance(group, list):
-            for el in group:
-                if isinstance(el, dict) and el.get("tag") == "text":
-                    texts.append(el.get("text", ""))
+    # 提取 markdown 字段文本 与 详情链接
+    md_text = ""
+    detail_url = ""
+    for el in card.get("elements", []):
+        if not isinstance(el, dict):
+            continue
+        tag = el.get("tag")
+        if tag == "div":
+            t = el.get("text", {})
+            if isinstance(t, dict) and t.get("tag") == "lark_md":
+                md_text = t.get("content", "")
+        elif tag == "action":
+            for action in el.get("actions", []):
+                if not isinstance(action, dict):
+                    continue
+                if action.get("tag") == "button":
+                    for b in action.get("behaviors", []):
+                        if isinstance(b, dict) and b.get("type") == "open_url":
+                            u = b.get("default_url", "")
+                            if u:
+                                detail_url = u
 
-    # 字段名(以:结尾) 与 值(下一个 text) 配对
+    # 解析 markdown 字段（**字段名:** 值），按字段名位置分割，值可含换行
     kv = {}
-    i = 0
-    while i < len(texts):
-        t = texts[i].strip()
-        if t.endswith(":"):
-            key = t[:-1]
-            val = texts[i + 1].strip() if i + 1 < len(texts) else ""
-            kv[key] = val
-            i += 2
-        else:
-            i += 1
+    matches = list(re.finditer(r"\*\*([^*:]+):\*\*", md_text))
+    for i, m in enumerate(matches):
+        key = m.group(1).strip()
+        start = m.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(md_text)
+        kv[key] = md_text[start:end].strip()
 
     def val(key):
         return kv.get(key, "").strip()
@@ -301,8 +316,7 @@ def parse_interactive_card(card):
     except ValueError:
         fields["置信度"] = None
     fields["理由摘要"] = val("理由摘要")
-    # 新版卡片"查看详情"按钮已承载原详情链接功能，且无独立 URL，故留空
-    fields["详情链接"] = ""
+    fields["详情链接"] = detail_url
     return fields
 
 
@@ -328,6 +342,17 @@ def ts_to_ms_safe(ts_str):
         return int(ts_str)
     except (ValueError, TypeError):
         return None
+
+
+def ts_to_date_ms(ts_ms):
+    """毫秒时间戳 -> 当天 00:00 (Asia/Shanghai) 的毫秒时间戳，用于「日期（用以分析）」字段。"""
+    if not ts_ms:
+        return None
+    from datetime import datetime, timezone, timedelta
+    tz = timezone(timedelta(hours=8))
+    dt = datetime.fromtimestamp(int(ts_ms) / 1000, tz)
+    day_start = dt.replace(hour=0, minute=0, second=0, microsecond=0)
+    return int(day_start.timestamp() * 1000)
 
 
 def fetch_existing_ids(token, base_token, table_id):
@@ -449,6 +474,7 @@ def main():
                 continue
             record = {
                 "记录时间": ts_to_ms_safe(m.get("create_time")),
+                "日期（用以分析）": ts_to_date_ms(ts_to_ms_safe(m.get("create_time"))),
                 "发件人": f["发件人"],
                 "主题": f["主题"],
                 "命中规则": f["命中规则"],
@@ -459,7 +485,7 @@ def main():
                 "消息ID": mid,
                 "消息链接": f"https://applink.feishu.cn/client/chat/open?openChatId={urllib.parse.quote(chat_id)}&position={mid}",
             }
-            # 「详情链接」为超链接类型(type=15)，仅当有 URL 时写对象格式；新版卡片无 URL 则留空
+            # 「详情链接」为超链接类型(type=15)，仅当有 URL 时写对象格式
             if f.get("详情链接"):
                 record["详情链接"] = {"text": f["详情链接"], "link": f["详情链接"]}
             # 移除值为 None 的字段（datetime/number 不接受 null）
