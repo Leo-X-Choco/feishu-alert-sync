@@ -253,11 +253,11 @@ def parse_alert(content_text):
 def parse_interactive_card(card):
     """
     解析 interactive 卡片消息（新版预警格式）。
-    筛选 title 含"法务邮箱"的法务/侵权预警，返回字段 dict；不符合返回 None。
+    筛选 title 含"法务/侵权邮件预警"的卡片，返回字段 dict；不符合返回 None。
     字段值以 "字段名:" text 与 " 值\n" text 交替出现，据此配对。
     """
     title = card.get("title", "")
-    if "法务邮箱" not in title or "法务/侵权邮件预警" not in title:
+    if "法务/侵权邮件预警" not in title:
         return None
 
     # 展平所有 text 标签
@@ -307,7 +307,7 @@ def parse_interactive_card(card):
 
 
 def parse_message(msg_type, content):
-    """按消息类型解析，仅筛选含"法务邮箱"的法务/侵权预警，返回字段 dict 或 None。"""
+    """按消息类型解析，筛选含"法务/侵权邮件预警"的消息，返回字段 dict 或 None。"""
     if msg_type == "interactive":
         try:
             obj = json.loads(content)
@@ -317,7 +317,7 @@ def parse_message(msg_type, content):
             return parse_interactive_card(obj)
     else:
         text = extract_text(content)
-        if "法务邮箱" in text and "法务/侵权邮件预警" in text:
+        if "法务/侵权邮件预警" in text:
             return parse_alert(text)
     return None
 
@@ -431,7 +431,7 @@ def main():
                     raw_alerts.append((m, fields))
             if not has_more:
                 break
-        print(f"[INFO] 扫描消息 {scanned} 条，其中法务邮箱预警 {len(raw_alerts)} 条")
+        print(f"[INFO] 扫描消息 {scanned} 条，其中法务/侵权预警 {len(raw_alerts)} 条")
 
         # 2. 读取已有消息ID做去重
         stage = "读取表内已有记录"
