@@ -250,6 +250,78 @@ def parse_alert(content_text):
     return fields
 
 
+def parse_interactive_card(card):
+    """
+    解析 interactive 卡片消息（新版预警格式）。
+    筛选 title 含"法务邮箱"的法务/侵权预警，返回字段 dict；不符合返回 None。
+    字段值以 "字段名:" text 与 " 值\n" text 交替出现，据此配对。
+    """
+    title = card.get("title", "")
+    if "法务邮箱" not in title or "法务/侵权邮件预警" not in title:
+        return None
+
+    # 展平所有 text 标签
+    texts = []
+    for group in card.get("elements", []):
+        if isinstance(group, list):
+            for el in group:
+                if isinstance(el, dict) and el.get("tag") == "text":
+                    texts.append(el.get("text", ""))
+
+    # 字段名(以:结尾) 与 值(下一个 text) 配对
+    kv = {}
+    i = 0
+    while i < len(texts):
+        t = texts[i].strip()
+        if t.endswith(":"):
+            key = t[:-1]
+            val = texts[i + 1].strip() if i + 1 < len(texts) else ""
+            kv[key] = val
+            i += 2
+        else:
+            i += 1
+
+    def val(key):
+        return kv.get(key, "").strip()
+
+    fields = {}
+    fields["发件人"] = clean_md_link(val("发件人"))
+    fields["主题"] = clean_md_link(val("主题"))
+    fields["命中规则"] = val("命中规则")
+    score = val("Hit_Score")
+    try:
+        fields["Hit_Score"] = int(float(score)) if score else None
+    except (ValueError, TypeError):
+        fields["Hit_Score"] = None
+    category = val("法务类别")
+    fields["法务类别"] = category if category in CATEGORY_OPTIONS else "其他"
+    conf = val("置信度")
+    try:
+        fields["置信度"] = float(conf) if conf else None
+    except ValueError:
+        fields["置信度"] = None
+    fields["理由摘要"] = val("理由摘要")
+    # 新版卡片"查看详情"按钮已承载原详情链接功能，且无独立 URL，故留空
+    fields["详情链接"] = ""
+    return fields
+
+
+def parse_message(msg_type, content):
+    """按消息类型解析，仅筛选含"法务邮箱"的法务/侵权预警，返回字段 dict 或 None。"""
+    if msg_type == "interactive":
+        try:
+            obj = json.loads(content)
+        except (ValueError, TypeError):
+            return None
+        if isinstance(obj, dict):
+            return parse_interactive_card(obj)
+    else:
+        text = extract_text(content)
+        if "法务邮箱" in text and "法务/侵权邮件预警" in text:
+            return parse_alert(text)
+    return None
+
+
 def ts_to_ms_safe(ts_str):
     """create_time 毫秒时间戳字符串 -> int"""
     try:
@@ -353,12 +425,13 @@ def main():
                 if ct < cutoff:
                     has_more = False
                     break
-                text = extract_text(m.get("body", {}).get("content", ""))
-                if "法务/侵权邮件预警" in text:
-                    raw_alerts.append((m, text))
+                body = m.get("body", {})
+                fields = parse_message(m.get("msg_type", ""), body.get("content", ""))
+                if fields is not None:
+                    raw_alerts.append((m, fields))
             if not has_more:
                 break
-        print(f"[INFO] 扫描消息 {scanned} 条，其中预警消息 {len(raw_alerts)} 条")
+        print(f"[INFO] 扫描消息 {scanned} 条，其中法务邮箱预警 {len(raw_alerts)} 条")
 
         # 2. 读取已有消息ID做去重
         stage = "读取表内已有记录"
@@ -369,13 +442,9 @@ def main():
         stage = "解析新消息"
         new_records = []
         skipped = 0
-        for m, text in raw_alerts:
+        for m, f in raw_alerts:
             mid = m.get("message_id", "")
             if not mid or mid in existing:
-                skipped += 1
-                continue
-            f = parse_alert(text)
-            if f is None:
                 skipped += 1
                 continue
             record = {
@@ -387,11 +456,12 @@ def main():
                 "法务类别": f["法务类别"],
                 "置信度": f["置信度"],
                 "理由摘要": f["理由摘要"],
-                # 「详情链接」字段为超链接类型(type=15)，必须写对象格式，纯字符串会报 1254068 URLFieldConvFail
-                "详情链接": ({"text": f["详情链接"], "link": f["详情链接"]} if f["详情链接"] else None),
                 "消息ID": mid,
                 "消息链接": f"https://applink.feishu.cn/client/chat/open?openChatId={urllib.parse.quote(chat_id)}&position={mid}",
             }
+            # 「详情链接」为超链接类型(type=15)，仅当有 URL 时写对象格式；新版卡片无 URL 则留空
+            if f.get("详情链接"):
+                record["详情链接"] = {"text": f["详情链接"], "link": f["详情链接"]}
             # 移除值为 None 的字段（datetime/number 不接受 null）
             record = {k: v for k, v in record.items() if v is not None}
             new_records.append(record)
