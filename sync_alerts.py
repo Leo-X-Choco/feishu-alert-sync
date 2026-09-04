@@ -106,8 +106,15 @@ def build_alert_text(stage, cause, job_url=None):
     return "\n".join(lines)
 
 
+# 飞书服务端瞬时错误码（HTTP 200 但 code!=0，值得退避重试）：
+#   1255002  Bitable 服务端内部错误 "Something went wrong"（如 2026-09-04 12:59 那次读表失败）
+RETRYABLE_LARK_CODES = {1255002}
+
+
 def http_json(method, url, headers=None, payload=None):
-    """发起 HTTP 请求，返回解析后的 JSON。读超时/网络错误退避重试 1 次。"""
+    """发起 HTTP 请求，返回解析后的 JSON。
+    读超时/网络错误退避重试 1 次；飞书服务端瞬时错误码（RETRYABLE_LARK_CODES）同样退避重试 1 次。
+    """
     req = urllib.request.Request(url, method=method)
     req.add_header("Content-Type", "application/json; charset=utf-8")
     for k, v in (headers or {}).items():
@@ -120,7 +127,7 @@ def http_json(method, url, headers=None, payload=None):
     for attempt in range(2):  # 首次 + 1 次重试
         try:
             with urllib.request.urlopen(req, data=data, timeout=30) as resp:
-                return json.loads(resp.read().decode("utf-8"))
+                result = json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             # HTTP 状态码错误是明确的业务错误，不重试，直接归类
             body = e.read().decode("utf-8", "ignore")
@@ -131,8 +138,16 @@ def http_json(method, url, headers=None, payload=None):
             if attempt == 0:
                 time.sleep(2)
                 continue
-    # 重试耗尽仍失败，转为 LarkError 以便上层归类到具体阶段
-    raise LarkError(f"请求超时/网络错误（已重试 1 次仍失败）: {last_err}") from last_err
+            # 重试耗尽仍失败，转为 LarkError 以便上层归类到具体阶段
+            raise LarkError(f"请求超时/网络错误（已重试 1 次仍失败）: {last_err}") from last_err
+
+        # 飞书服务端瞬时错误码（HTTP 200 但 code!=0）：退避 2 秒后重试 1 次
+        if isinstance(result.get("code"), int) and result["code"] in RETRYABLE_LARK_CODES:
+            if attempt == 0:
+                time.sleep(2)
+                continue
+            # 重试耗尽：原样返回，由调用方按各自逻辑抛错（错误信息保持一致）
+        return result
 
 
 def get_tenant_token(app_id, app_secret):
