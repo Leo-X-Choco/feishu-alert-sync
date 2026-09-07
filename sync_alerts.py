@@ -1,22 +1,23 @@
 # -*- coding: utf-8 -*-
+# Copyright (c) 2026 Leo-X-Choco. 仅供学习参考，未经授权禁止复制、分发及商用。
 """
-云端同步脚本：飞书群【邮件资产-客服】法务/侵权邮件预警 → 多维表格【法务侵权邮件预警记录】
+云端同步脚本：飞书群内"法务/侵权邮件预警"卡片消息 → 飞书多维表格（Bitable）
 
 运行环境：GitHub Actions（或任意 Linux 服务器 + cron）
 认证方式：飞书开放平台企业自建应用（tenant_access_token，自动获取，无需人工刷新）
 
-所需环境变量（通过 GitHub Secrets 配置）：
+所需环境变量（通过 GitHub Secrets 配置，请替换为你自己的资源标识）：
   FEISHU_APP_ID        自建应用 App ID
   FEISHU_APP_SECRET    自建应用 App Secret
-  FEISHU_BASE_TOKEN    多维表格 Base token（FjGXbNiKmabLJzs4bt9cQTTJnwY）
-  FEISHU_TABLE_ID      表 ID（tbla4IqbNsmQCqvp）
-  FEISHU_CHAT_ID       群 chat_id（oc_41b71ccde24705641e1e382fabe7b4d4）
-  FEISHU_ALERT_WEBHOOK 可选，飞书群机器人 Webhook（用于失败告警，见 README）
+  FEISHU_BASE_TOKEN    多维表格 Base token（形如 FjXXXXXXXXXXXXXXXXXXXXXX）
+  FEISHU_TABLE_ID      表 ID（形如 tblXXXXXXXXXXXXXXXXXX）
+  FEISHU_CHAT_ID       群 chat_id（形如 oc_xxxxxxxxxxxxxxxxxxxxxxxx）
+  FEISHU_ALERT_WEBHOOK 可选，飞书群机器人 Webhook（用于失败告警）
   LOOKBACK_HOURS       可选，扫描最近 N 小时内的消息，默认 24
 
 行为：
-  1. 拉取群内最近消息（分页）
-  2. 筛选"⚖️ 法务/侵权邮件预警"类消息（内容含"法务/侵权邮件预警"）
+  1. 拉取群内最近消息（分页，card_msg_content_type=user_card_content 取原始卡片 JSON）
+  2. 筛选"⚖️ 法务/侵权邮件预警"类卡片消息
   3. 读取表中已有"消息ID"做去重
   4. 批量写入新记录（幂等，重复运行安全）
   5. 任一阶段失败时，若配置了 FEISHU_ALERT_WEBHOOK，自动向飞书群发送告警
