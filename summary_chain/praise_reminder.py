@@ -3,8 +3,10 @@
 
 流程：
   send 模式：读选项卡表(提醒时间=10:00) → 排班表在岗过滤 → 逐人 @ 发送
-             （发送结果落 state 文件供 verify 使用）
-  verify 模式：读 state，校验已读；未读补发一次；仍失败 → 群告警
+             （发送结果落 state 文件供 verify 使用；通道=群自定义机器人 Webhook）
+  verify 模式：读 state 校验。Webhook 通道无 message_id，无已读回执 →
+             跳过已读校验与未读补发（与本地生产版一致）；仅报告历史发送失败项。
+             含 message_id 的历史 state（im 通道）仍走已读校验+补发。
 
 在岗判定：排班表当日状态 ∈ {休息,请假,节假日} → 不在岗跳过；
          无记录或其他状态 → 在岗照常提醒。全员不在岗 → 静默结束(0)。
@@ -63,7 +65,7 @@ def mode_send(iso_date: str) -> int:
         print("[结果] 无在岗目标，静默结束")
         return 0
 
-    state, failures = {"date": iso_date, "sends": []}, []
+    state, failures = {"date": iso_date, "channel": "webhook", "sends": []}, []
     for m in targets:
         entry = {"name": m, "open_id": config.OPEN_IDS.get(m, "")}
         if not entry["open_id"]:
@@ -71,11 +73,11 @@ def mode_send(iso_date: str) -> int:
             entry["error"] = "缺少 open_id 映射"
         else:
             try:
-                mid = feishu_api.send_post_message(
-                    config.CHAT_ID, "每日好评提醒", entry["open_id"],
+                channel = feishu_api.send_group_message(
+                    "每日好评提醒", entry["open_id"],
                     [f"你好，请及时处理今日「{config.PRAISE_TAB_NAME}」相关工作（好评邮件邀约与发放，记得截图登记）。"])
-                entry["message_id"] = mid
-                print(f"   ✅ {m} -> {mid}")
+                entry["channel"] = channel
+                print(f"   ✅ {m} -> {channel}")
             except Exception as e:  # noqa: BLE001
                 failures.append(m)
                 entry["error"] = str(e)
@@ -97,11 +99,15 @@ def mode_verify(iso_date: str) -> int:
         return 0
     with open(STATE_FILE, encoding="utf-8") as f:
         state = json.load(f)
-    unread, failures = [], []
+    unread, failures, webhook_skipped = [], [], []
     for entry in state.get("sends", []):
         mid = entry.get("message_id")
         if not mid:
-            failures.append(entry["name"])
+            # webhook 通道：无已读回执，跳过校验（不误报）
+            if not entry.get("error"):
+                webhook_skipped.append(entry["name"])
+            else:
+                failures.append(entry["name"])
             continue
         try:
             read = feishu_api.read_users(mid)
@@ -121,6 +127,8 @@ def mode_verify(iso_date: str) -> int:
                     entry["resent_error"] = str(e)
         except Exception as e:  # noqa: BLE001
             print(f"   [已读校验不可用] {entry['name']}: {e}")
+    if webhook_skipped:
+        print(f"[verify] webhook 通道无已读回执，跳过校验: {webhook_skipped or '无'}")
     if failures:
         config.send_alert(f"🚨【好评提醒未送达】\n日期：{iso_date}\n成员：{('、'.join(failures))}\n请人工 @ 跟进。")
         return 2

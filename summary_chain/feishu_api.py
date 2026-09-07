@@ -137,9 +137,55 @@ def base_update(table_id: str, record_id: str, fields: dict,
 # ---------------------------------------------------------------------------
 # 消息
 # ---------------------------------------------------------------------------
+def send_group_message(title: str, at_open_id: str | None,
+                       text_lines: list[str], retries: int = 3) -> str:
+    """群通知主通道：自定义机器人 Webhook（interactive 卡片 markdown）。
+
+    @ 语法 <at id=ou_xxx></at> 已在生产群实测（2026-09-04）。
+    Webhook 通道无 message_id，不支持已读校验（与本地生产版行为一致）。
+    返回通道标识 "webhook"；重试后仍失败抛 RuntimeError。
+    """
+    if not config.ALERT_WEBHOOK:
+        raise RuntimeError("未配置 FEISHU_ALERT_WEBHOOK（群自定义机器人地址）")
+    parts = []
+    if at_open_id:
+        parts.append(f"<at id={at_open_id}></at> ")
+    parts.append("\n".join(text_lines or [""]))
+    payload = {
+        "msg_type": "interactive",
+        "card": {
+            "config": {"wide_screen_mode": True},
+            "elements": [{"tag": "markdown",
+                          "content": f"**【{title}】**\n" + "".join(parts)}],
+        },
+    }
+    last_err = None
+    for attempt in range(retries):
+        try:
+            req = urllib.request.Request(
+                config.ALERT_WEBHOOK,
+                data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                method="POST")
+            req.add_header("Content-Type", "application/json; charset=utf-8")
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                d = json.loads(resp.read().decode("utf-8"))
+            if d.get("code") == 0 or d.get("StatusCode") == 200:
+                return "webhook"
+            last_err = RuntimeError(f"webhook业务失败: {json.dumps(d, ensure_ascii=False)[:200]}")
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+        if attempt < retries - 1:
+            time.sleep(5 * (attempt + 1))  # 5s/10s
+    raise RuntimeError(f"消息发送失败（webhook 已重试 {retries} 次）: {last_err}")
+
+
 def send_post_message(chat_id: str, title: str, at_open_id: str | None,
                       text_lines: list[str], retries: int = 3) -> str:
-    """发富文本消息（可带 @），返回 message_id。"""
+    """备用通道：应用机器人富文本消息（返回 message_id，支持已读校验）。
+
+    需要应用开通 im:message:send_as_bot 权限且机器人入群；当前云端链路默认
+    走 send_group_message（webhook），本函数保留用于未来双通道升级。
+    """
     para = []
     if at_open_id:
         para.append({"tag": "at", "user_id": at_open_id})

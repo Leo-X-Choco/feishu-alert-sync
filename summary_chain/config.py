@@ -24,6 +24,8 @@ DAILY_FIELD_WORK = "今日工作情况"     # text，小结写入目标
 DAILY_DOC_ID = os.environ.get("FEISHU_DAILY_DOC", "GlpCduwAropB88xvWpLcuEFinff")
 CHAT_ID = os.environ.get("FEISHU_CHAT_ID", "oc_485dd8d59a0115a43870c289994f429d")
 ALERT_WEBHOOK = os.environ.get("FEISHU_ALERT_WEBHOOK", "")
+# ^ 群自定义机器人 Webhook：既是失败告警通道，也是 2026-09-07 起所有群通知的
+#   主通道（send_group_message）；无需应用机器人入群与 im 发消息权限。
 
 # 成员与 open_id（企业租户内固定）
 MEMBERS = ["许磊", "李燕芳", "胡镭", "李玉婷", "方佳莹"]
@@ -72,11 +74,11 @@ def send_alert(text: str) -> bool:
     import urllib.request
     try:
         payload = {"msg_type": "text", "content": {"text": text}}
-        req = urllib.request.Request(ALERT_WEBHOOK, method="POST")
+        req = urllib.request.Request(
+            ALERT_WEBHOOK, data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            method="POST")
         req.add_header("Content-Type", "application/json; charset=utf-8")
-        with urllib.request.urlopen(
-                req, data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-                timeout=15) as resp:
+        with urllib.request.urlopen(req, timeout=15) as resp:
             resp.read()
         return True
     except Exception as e:  # noqa: BLE001

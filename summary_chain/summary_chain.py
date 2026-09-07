@@ -43,12 +43,12 @@ def off_duty_members(iso_date: str) -> set[str]:
 
 
 def remind(missing: list[str], text: str) -> list[str]:
-    """逐人 @ 提醒，返回发送失败名单。"""
+    """逐人 @ 提醒（群自定义机器人 Webhook），返回发送失败名单。"""
     failed = []
     for m in missing:
         try:
-            feishu_api.send_post_message(config.CHAT_ID, "每日小结提醒",
-                                         config.OPEN_IDS.get(m), [text])
+            feishu_api.send_group_message("每日小结提醒",
+                                          config.OPEN_IDS.get(m), [text])
             print(f"   ✉️ 已提醒 {m}")
         except Exception as e:  # noqa: BLE001
             failed.append(m)

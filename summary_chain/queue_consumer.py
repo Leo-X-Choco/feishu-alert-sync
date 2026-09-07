@@ -38,8 +38,8 @@ def main() -> int:
         err = ""
         for name in receivers:
             try:
-                feishu_api.send_post_message(config.CHAT_ID, "任务对接通知",
-                                             config.OPEN_IDS.get(name), lines)
+                feishu_api.send_group_message("任务对接通知",
+                                              config.OPEN_IDS.get(name), lines)
             except Exception as e:  # noqa: BLE001
                 ok_all = False
                 err = str(e)
