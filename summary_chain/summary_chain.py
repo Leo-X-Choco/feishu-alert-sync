@@ -82,13 +82,13 @@ def _bitable_date(value) -> str:
     return str(value)[:10]
 
 
-def sync_to_bitable(iso_date: str, summaries: list[dict]) -> tuple[list[str], list[str]]:
+def sync_to_bitable(iso_date: str, summaries: list[dict]) -> tuple[list[str], list[str], dict]:
     """将当日小结写入日报多维表格「海外客服三组日报」并回写「同步状态」。
 
     匹配规则：按成员姓名搜索行（姓名 select），再按「时间」字段日期匹配当日行；
     有行 → 更新「今日工作情况」（覆盖）；无行 → 新建（时间+姓名+今日工作情况）。
     「姓名」下拉无该成员选项 → 结构性跳过（与原 docx 无对应行行为一致）。
-    返回 (成功, 失败) 名单。
+    返回 (成功, 失败, 失败原因映射)。
     """
     app, table = config.DAILY_BITABLE_TOKEN, config.DAILY_BITABLE_TABLE
     try:
@@ -97,7 +97,7 @@ def sync_to_bitable(iso_date: str, summaries: list[dict]) -> tuple[list[str], li
         print(f"   [警告] 读取姓名选项失败（{e}），本轮跳过选项预检")
         name_options = None
 
-    success, failed = [], []
+    success, failed, err_map = [], [], {}
     for s in summaries:
         member = (s["fields"].get("成员") or "").strip()
         text = s["fields"].get("小结") or ""
@@ -137,6 +137,7 @@ def sync_to_bitable(iso_date: str, summaries: list[dict]) -> tuple[list[str], li
             success.append(member)
         except Exception as e:  # noqa: BLE001
             failed.append(member)
+            err_map[member] = str(e)[:200]
             print(f"   ❌ 写入日报多维表格失败 {member}: {e}")
         # 回写同步状态（失败不中断其他成员）
         if s.get("record_id"):
@@ -146,7 +147,7 @@ def sync_to_bitable(iso_date: str, summaries: list[dict]) -> tuple[list[str], li
                                         else "同步失败"})
             except Exception as e:  # noqa: BLE001
                 print(f"   [回写失败] {member}: {e}")
-    return success, failed
+    return success, failed, err_map
 
 
 def run(mode: str, iso_date: str) -> int:
@@ -172,12 +173,13 @@ def run(mode: str, iso_date: str) -> int:
             remind_failed = remind(missing, REMIND_1730)
         print("[结果] 执行兜底同步（空小结自动跳过）")
 
-    success, failed = sync_to_bitable(iso_date, summaries)
+    success, failed, err_map = sync_to_bitable(iso_date, summaries)
     print(f"[同步] 成功={success} 失败={failed}")
     if failed:
+        detail = "；".join(f"{m}: {err_map.get(m, '')}" for m in failed[:3])
         config.send_alert(
             f"🚨【每日小结同步部分失败】\n日期：{iso_date}\n失败成员：{('、'.join(failed))}\n"
-            f"已回写「同步失败」状态，工作台看板可见。")
+            f"错误详情：{detail}\n已回写「同步失败」状态，工作台看板可见。")
         return 1
     return 0
 
