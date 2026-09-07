@@ -1,0 +1,42 @@
+name: Daily Summary Check (15:30 CST)
+
+on:
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "YYYY-MM-DD（留空=今天；测试时可填历史日期）"
+        required: false
+        default: ""
+  schedule:
+    - cron: "30 7 * * *" # 15:30 北京时间（UTC+8）
+
+concurrency:
+  group: summary-check
+  cancel-in-progress: false
+
+jobs:
+  summary-check:
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.CLOUD_CHAIN_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+      FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+      FEISHU_ALERT_WEBHOOK: ${{ secrets.FEISHU_ALERT_WEBHOOK }}
+      FEISHU_BASE_TOKEN: Qd4ubeDLVazKBrspvMXcSY1Xn5c
+      FEISHU_SUMMARY_TABLE: tblG2f1FnNCUyFSM
+      FEISHU_SCHED_TABLE: tblVDbIezF6DSH6D
+      FEISHU_TAB_TABLE: tbl37M2meI0EG3bM
+      FEISHU_QUEUE_TABLE: tblSTXDvYP8rKlaC
+      FEISHU_DAILY_DOC: GlpCduwAropB88xvWpLcuEFinff
+      FEISHU_CHAT_ID: oc_485dd8d59a0115a43870c289994f429d
+      RUN_DATE: ${{ inputs.date }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Check & remind or sync
+        run: python -m summary_chain.summary_chain --mode check ${RUN_DATE:+--date $RUN_DATE}
+      - name: Consume transfer fallback queue
+        run: python -m summary_chain.queue_consumer

@@ -1,0 +1,44 @@
+name: Daily Praise Reminder (10:00 CST)
+
+on:
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "YYYY-MM-DD（留空=今天；测试时可填历史日期）"
+        required: false
+        default: ""
+  schedule:
+    - cron: "0 2 * * *" # 10:00 北京时间（UTC+8）
+
+concurrency:
+  group: praise-reminder
+  cancel-in-progress: false
+
+jobs:
+  praise-reminder:
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.CLOUD_CHAIN_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+      FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+      FEISHU_ALERT_WEBHOOK: ${{ secrets.FEISHU_ALERT_WEBHOOK }}
+      FEISHU_BASE_TOKEN: Qd4ubeDLVazKBrspvMXcSY1Xn5c
+      FEISHU_SUMMARY_TABLE: tblG2f1FnNCUyFSM
+      FEISHU_SCHED_TABLE: tblVDbIezF6DSH6D
+      FEISHU_TAB_TABLE: tbl37M2meI0EG3bM
+      FEISHU_QUEUE_TABLE: tblSTXDvYP8rKlaC
+      FEISHU_DAILY_DOC: GlpCduwAropB88xvWpLcuEFinff
+      FEISHU_CHAT_ID: oc_485dd8d59a0115a43870c289994f429d
+      RUN_DATE: ${{ inputs.date }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Send reminders (duty-checked)
+        run: python -m summary_chain.praise_reminder --mode send ${RUN_DATE:+--date $RUN_DATE}
+      - name: Wait 20 minutes for read
+        run: sleep 1200
+      - name: Verify reads, resend unread
+        run: python -m summary_chain.praise_reminder --mode verify ${RUN_DATE:+--date $RUN_DATE}
