@@ -12,6 +12,14 @@ SCHED_TABLE = os.environ.get("FEISHU_SCHED_TABLE", "tblVDbIezF6DSH6D")
 TAB_TABLE = os.environ.get("FEISHU_TAB_TABLE", "tbl37M2meI0EG3bM")
 QUEUE_TABLE = os.environ.get("FEISHU_QUEUE_TABLE", "tblSTXDvYP8rKlaC")
 
+# 飞书日报多维表格「海外客服三组日报」（2026-09-07 起，替代原 docx 日报文档）
+# wiki 节点 OAuLw7z9Sixj9jkYoykcEgPinsh → base CixAbQERqaOifistxhIcdTkcnue
+DAILY_BITABLE_TOKEN = os.environ.get("FEISHU_DAILY_BITABLE", "CixAbQERqaOifistxhIcdTkcnue")
+DAILY_BITABLE_TABLE = os.environ.get("FEISHU_DAILY_BITABLE_TABLE", "tbl7oMLDrYaWRGwd")
+DAILY_FIELD_DATE = "时间"            # datetime，行日期
+DAILY_FIELD_NAME = "姓名"            # select（李燕芳/胡镭/李玉婷/方佳莹）
+DAILY_FIELD_WORK = "今日工作情况"     # text，小结写入目标
+
 # 飞书日报文档与提醒群
 DAILY_DOC_ID = os.environ.get("FEISHU_DAILY_DOC", "GlpCduwAropB88xvWpLcuEFinff")
 CHAT_ID = os.environ.get("FEISHU_CHAT_ID", "oc_485dd8d59a0115a43870c289994f429d")

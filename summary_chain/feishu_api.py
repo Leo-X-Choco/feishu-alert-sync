@@ -75,8 +75,13 @@ def _norm(value):
 
 
 def base_search(table_id: str, conditions: list[dict] | None = None,
-                field_names: list[str] | None = None) -> list[dict]:
-    """检索记录，返回 [{record_id, fields(已规范化)}]。空 conditions = 全表。"""
+                field_names: list[str] | None = None,
+                app_token: str | None = None) -> list[dict]:
+    """检索记录，返回 [{record_id, fields(已规范化)}]。空 conditions = 全表。
+
+    app_token 缺省用「客服小组工作数据」Base；跨 Base（如日报多维表格）时显式传入。
+    """
+    app = app_token or config.BASE_TOKEN
     out, page_token = [], ""
     while True:
         body = {"page_size": 500}
@@ -86,7 +91,7 @@ def base_search(table_id: str, conditions: list[dict] | None = None,
             body["filter"] = {"conjunction": "and", "conditions": conditions}
         if page_token:
             body["page_token"] = page_token
-        d = api("POST", f"/open-apis/bitable/v1/apps/{config.BASE_TOKEN}"
+        d = api("POST", f"/open-apis/bitable/v1/apps/{app}"
                         f"/tables/{table_id}/records/search", body=body)
         for item in d.get("items") or []:
             fields = {k: _norm(v) for k, v in (item.get("fields") or {}).items()}
@@ -96,20 +101,37 @@ def base_search(table_id: str, conditions: list[dict] | None = None,
             return out
 
 
-def base_create(table_id: str, records: list[dict]) -> int:
+def field_options(app_token: str, table_id: str, field_name: str) -> set[str]:
+    """读取某表指定（select）字段的全部选项名。"""
+    d = api("GET", f"/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/fields",
+            params={"page_size": 100})
+    for f in d.get("items") or []:
+        if f.get("field_name") == field_name:
+            opts = {o.get("name", "").strip()
+                    for o in (f.get("property") or {}).get("options") or []}
+            opts.discard("")
+            return opts
+    raise RuntimeError(f"未找到字段「{field_name}」")
+
+
+def base_create(table_id: str, records: list[dict],
+                app_token: str | None = None) -> int:
     """批量新建记录，fields 为 {字段名: 值}；返回写入条数。"""
+    app = app_token or config.BASE_TOKEN
     n = 0
     for i in range(0, len(records), 100):
-        d = api("POST", f"/open-apis/bitable/v1/apps/{config.BASE_TOKEN}"
+        d = api("POST", f"/open-apis/bitable/v1/apps/{app}"
                         f"/tables/{table_id}/records/batch_create",
                 body={"records": [{"fields": r} for r in records[i:i + 100]]})
         n += len(d.get("records") or [])
     return n
 
 
-def base_update(table_id: str, record_id: str, fields: dict) -> None:
-    api("PUT", f"/open-apis/bitable/v1/apps/{config.BASE_TOKEN}"
-               f"/tables/{table_id}/records/{record_id}", body={"fields": fields})
+def base_update(table_id: str, record_id: str, fields: dict,
+                app_token: str | None = None) -> None:
+    app = app_token or config.BASE_TOKEN
+    api("PUT", f"/open-apis/bitable/v1/apps/{app}/tables/{table_id}/records/{record_id}",
+        body={"fields": fields})
 
 
 # ---------------------------------------------------------------------------
