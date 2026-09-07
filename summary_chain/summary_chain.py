@@ -128,7 +128,9 @@ def sync_to_bitable(iso_date: str, summaries: list[dict]) -> tuple[list[str], li
             else:
                 feishu_api.base_create(table, [{
                     config.DAILY_FIELD_DATE: f"{iso_date} 00:00",
-                    config.DAILY_FIELD_NAME: [member],
+                    # 单选字段必须传纯字符串（原生 API 传列表会报 1254062
+                    # SingleSelectFieldConvFail；lark-cli 层会归一化，本地版不受影响）
+                    config.DAILY_FIELD_NAME: member,
                     config.DAILY_FIELD_WORK: work_text,
                 }], app_token=app)
                 print(f"   ✅ 新建日报行: {member}")
