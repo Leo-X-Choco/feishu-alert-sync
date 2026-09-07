@@ -82,6 +82,14 @@ def _bitable_date(value) -> str:
     return str(value)[:10]
 
 
+def _bitable_ms(iso_date: str) -> int:
+    """ISO 日期 → 北京时间当日 0 点的毫秒时间戳（原生 API 日期字段要求 ms 数字，
+    字符串会报 1254064 DatetimeFieldConvFail；lark-cli 层会归一化，本地版不受影响）。"""
+    from datetime import datetime, timezone, timedelta
+    return int(datetime.strptime(iso_date, "%Y-%m-%d")
+               .replace(tzinfo=timezone(timedelta(hours=8))).timestamp() * 1000)
+
+
 def sync_to_bitable(iso_date: str, summaries: list[dict]) -> tuple[list[str], list[str], dict]:
     """将当日小结写入日报多维表格「海外客服三组日报」并回写「同步状态」。
 
@@ -127,7 +135,7 @@ def sync_to_bitable(iso_date: str, summaries: list[dict]) -> tuple[list[str], li
                 print(f"   ✅ 更新日报行: {member} ({target['record_id']})")
             else:
                 feishu_api.base_create(table, [{
-                    config.DAILY_FIELD_DATE: f"{iso_date} 00:00",
+                    config.DAILY_FIELD_DATE: _bitable_ms(iso_date),
                     # 单选字段必须传纯字符串（原生 API 传列表会报 1254062
                     # SingleSelectFieldConvFail；lark-cli 层会归一化，本地版不受影响）
                     config.DAILY_FIELD_NAME: member,
