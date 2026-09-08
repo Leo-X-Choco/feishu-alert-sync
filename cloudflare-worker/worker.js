@@ -20,6 +20,9 @@
 //   POST /api/upload   → drive medias/upload_all（body: {file_name, data_base64, size}）
 //                        上传为 bitable_image 附件（parent_node 固定为工作台 Base），
 //                        返回 file_token 供前端写入小结表「图片」附件字段
+//   POST /api/field-create  → 新增字段（body: {base, table, field_name, type, options?/property?}）
+//   POST /api/field-update  → 字段改名/改属性（body: {base, table, field_id, field_name, type, options?}）
+//   POST /api/field-delete  → 删除字段（body: {base, table, field_id, field_name}；初始字段受保护）
 
 const ALLOWED = {
   // 客服小组工作数据（四张工作台表）
@@ -28,9 +31,21 @@ const ALLOWED = {
     "tblVDbIezF6DSH6D", // 排班表
     "tbl37M2meI0EG3bM", // 工作选项卡
     "tblSTXDvYP8rKlaC", // 任务对接通知队列
+    "tbl013TV9PFTT1Or", // 考核基本信息
+    "tblEi5eafUHFZiXA", // 考核阶段规划
+    "tblqsfGvFBIKY6V1", // 考核实操评分
   ]),
   // 海外客服三组日报（小结同步目标）
   CixAbQERqaOifistxhIcdTkcnue: new Set(["tbl7oMLDrYaWRGwd"]),
+};
+
+// 考核三表的初始字段（2026-09-08 迁移快照）——field-delete 拒绝删除这些列，防误删迁移数据
+const EXAM_PROTECTED_FIELDS = {
+  tbl013TV9PFTT1Or: ["姓名", "状态", "入职日期", "带教人", "培训周期", "表格维护人", "平时成绩",
+    "实操成绩", "综合成绩", "结业理论成绩", "触碰红线", "验收结论", "进组结果", "签字确认"],
+  tblEi5eafUHFZiXA: ["姓名", "阶段", "天数", "培训考核内容", "考核方式"],
+  tblqsfGvFBIKY6V1: ["姓名", "日期", "分发量", "实际完成量", "质检合格分", "服务加分",
+    "带教人服务分", "带教人评语", "新人处理情况反馈"],
 };
 
 // 允许的浏览器来源（工作台页面所在域）
@@ -132,6 +147,41 @@ export default {
           body: fd,
         });
         const d = await r.json();
+        return json(d, 200, origin);
+      }
+
+      // 字段管理（考核三表）：create / update(改名/改类型) / delete（受保护名单约束）
+      if (request.method === "POST" && url.pathname.startsWith("/api/field-")) {
+        const body = await request.json();
+        if (!checkAllowed(body.base, body.table)) return json({ code: 403, msg: "resource not allowed" }, 403, origin);
+        const root = `/open-apis/bitable/v1/apps/${body.base}/tables/${body.table}/fields`;
+        const op = url.pathname.slice("/api/field-".length);
+        let path, init;
+        if (op === "create") {
+          path = root;
+          init = { method: "POST", body: JSON.stringify({
+            field_name: body.field_name, type: body.type,
+            property: body.property || (body.options ? { options: body.options } : undefined),
+          }) };
+        } else if (op === "update") {
+          if (!body.field_id) return json({ code: 400, msg: "field_id required" }, 400, origin);
+          path = `${root}/${body.field_id}`;
+          init = { method: "PUT", body: JSON.stringify({
+            field_name: body.field_name, type: body.type,
+            property: body.property || (body.options ? { options: body.options } : undefined),
+          }) };
+        } else if (op === "delete") {
+          const protectedNames = EXAM_PROTECTED_FIELDS[body.table] || [];
+          if (protectedNames.includes(body.field_name)) {
+            return json({ code: 403, msg: `字段「${body.field_name}」为迁移初始字段，禁止删除` }, 403, origin);
+          }
+          if (!body.field_id) return json({ code: 400, msg: "field_id required" }, 400, origin);
+          path = `${root}/${body.field_id}`;
+          init = { method: "DELETE" };
+        } else {
+          return json({ code: 404, msg: "not found" }, 404, origin);
+        }
+        const d = await feishu(env, path, init);
         return json(d, 200, origin);
       }
 
