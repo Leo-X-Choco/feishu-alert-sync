@@ -17,6 +17,9 @@
 //   POST /api/delete   → bitable records/batch_delete
 //   GET  /api/fields   → 某表字段列表（query: base, table）
 //   POST /api/token    → 换取短期 tenant_token（可选：前端自己调飞书只读接口时用）
+//   POST /api/upload   → drive medias/upload_all（body: {file_name, data_base64, size}）
+//                        上传为 bitable_image 附件（parent_node 固定为工作台 Base），
+//                        返回 file_token 供前端写入小结表「图片」附件字段
 
 const ALLOWED = {
   // 客服小组工作数据（四张工作台表）
@@ -101,6 +104,35 @@ export default {
 
       if (request.method === "POST" && url.pathname === "/api/token") {
         return json({ code: 0, data: { token: await tenantToken(env) } }, 200, origin);
+      }
+
+      // 图片上传（小结附件）：base64 JSON 入参 → 飞书 drive upload_all（bitable_image）
+      if (request.method === "POST" && url.pathname === "/api/upload") {
+        const body = await request.json();
+        // parent_node 固定为工作台 Base，防止把文件挂到任意资源
+        if (body.base !== "Qd4ubeDLVazKBrspvMXcSY1Xn5c") {
+          return json({ code: 403, msg: "resource not allowed" }, 403, origin);
+        }
+        const raw = String(body.data_base64 || "");
+        const size = Math.floor(raw.length * 3 / 4); // base64 近似原大小
+        if (!body.file_name || !raw) return json({ code: 400, msg: "file_name/data_base64 required" }, 400, origin);
+        if (size > 15 * 1024 * 1024) return json({ code: 400, msg: "file too large (max 15MB)" }, 400, origin);
+        const bytes = Uint8Array.from(atob(raw), (c) => c.charCodeAt(0));
+        const mime = /^image\/(png|jpeg|jpg|gif|webp)$/i.test(body.mime || "") ? body.mime : "image/png";
+        const fd = new FormData();
+        fd.append("file_name", String(body.file_name).slice(0, 200));
+        fd.append("parent_type", "bitable_image");
+        fd.append("parent_node", body.base);
+        fd.append("size", String(bytes.byteLength));
+        fd.append("file", new Blob([bytes], { type: mime }), String(body.file_name).slice(0, 200));
+        const token = await tenantToken(env);
+        const r = await fetch("https://open.feishu.cn/open-apis/drive/v1/medias/upload_all", {
+          method: "POST",
+          headers: { Authorization: "Bearer " + token },
+          body: fd,
+        });
+        const d = await r.json();
+        return json(d, 200, origin);
       }
 
       if (request.method !== "POST" && !(request.method === "GET" && url.pathname === "/api/fields")) {
