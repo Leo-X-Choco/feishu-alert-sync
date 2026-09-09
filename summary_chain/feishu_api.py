@@ -225,3 +225,38 @@ def read_users(message_id: str) -> set[str]:
         page_token = d.get("page_token") or ""
         if not d.get("has_more") or not page_token:
             return out
+
+
+def send_group_card(title: str, md_lines: list[str],
+                    retries: int = 3) -> str:
+    """群通知（合并卡片）：自定义机器人 Webhook，单条 interactive 卡片内
+    多行 markdown（可含多个 <at id=ou_xxx></at>）。返回通道标识 "webhook"。
+    与 send_group_message 的区别：一条消息覆盖多名成员，避免逐人多条刷屏。"""
+    if not config.ALERT_WEBHOOK:
+        raise RuntimeError("未配置 FEISHU_ALERT_WEBHOOK（群自定义机器人地址）")
+    payload = {
+        "msg_type": "interactive",
+        "card": {
+            "config": {"wide_screen_mode": True},
+            "elements": [{"tag": "markdown",
+                          "content": f"**【{title}】**\n" + "\n".join(md_lines or [""])}],
+        },
+    }
+    last_err = None
+    for attempt in range(retries):
+        try:
+            req = urllib.request.Request(
+                config.ALERT_WEBHOOK,
+                data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                method="POST")
+            req.add_header("Content-Type", "application/json; charset=utf-8")
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                d = json.loads(resp.read().decode("utf-8"))
+            if d.get("code") == 0 or d.get("StatusCode") == 200:
+                return "webhook"
+            last_err = RuntimeError(f"webhook业务失败: {json.dumps(d, ensure_ascii=False)[:200]}")
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+        if attempt < retries - 1:
+            time.sleep(5 * (attempt + 1))
+    raise RuntimeError(f"消息发送失败（webhook 已重试 {retries} 次）: {last_err}")
