@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
-"""每日小结检查与同步（云端版）。
+"""每日小结检查与提醒（云端版，纯提醒）。
 
-  --mode check   （15:30）在岗成员小结全部填写 → 直接同步；有未填 → @ 提醒一轮即结束
-  --mode final   （17:30）最后一轮 @ 提醒未提交者 → 无论是否填齐都同步（空小结跳过）
+  --mode check   （15:30）在岗成员有未填小结 → 群内 @ 提醒一轮；全员已填 → 静默
+  --mode final   （17:30）最后一轮 @ 提醒未提交者；全员已填 → 静默
 
-数据源：飞书多维表格（小结/排班）；写入目标：日报多维表格「海外客服三组日报」
-（按 日期+姓名 匹配行，更新「今日工作情况」，无行则新建）+ 小结表「同步状态」回写。
-在岗判定：排班表当日状态 ∈ {休息,请假,节假日} → 不在岗（不提醒/不同步/不回写）；
+2026-09-08 起：日报同步永久下线（日报表封存为历史快照），两个模式均只检查+提醒，
+不写任何表。数据源：飞书多维表格（小结/排班，只读）。
+在岗判定：排班表当日状态 ∈ {休息,请假,节假日} → 不在岗（不提醒）；
          无记录或其他状态 → 在岗。结构性跳过：「姓名」下拉中无选项的成员（如许磊）。
-退出码：0=完成  1=存在写入失败或其他错误
+退出码：0=全员已填(静默)或提醒全部发送成功  2=提醒发送失败(已群告警)  1=脚本异常
 """
 
 import argparse
@@ -16,9 +16,6 @@ import sys
 
 from . import config, feishu_api
 from .feishu_api import base_search
-
-REMIND_1530 = "今日工作小结还没填写，请在 17:20 前完成，当日会自动同步到飞书日报。"
-REMIND_1730 = "日报将先行同步，你今日的小结还未填写；请补填后联系组长安排补同步。"
 
 
 def fetch_summaries(iso_date: str) -> list[dict]:
@@ -56,109 +53,11 @@ def remind(missing: list[str], text: str) -> list[str]:
     return failed
 
 
-def _split_items(text: str) -> list[str]:
-    """小结文本 → 条目列表（按行拆分、去行首编号，与本地版一致）。"""
-    import re
-    items = []
-    for line in (text or "").replace("\r\n", "\n").split("\n"):
-        line = line.strip()
-        if not line:
-            continue
-        line = re.sub(r"^\s*(?:\d+|[一二三四五六七八九十]+)\s*[、.．:：)）]\s*", "", line)
-        line = line.strip()
-        if line:
-            items.append(line)
-    return items
-
-
-def _bitable_date(value) -> str:
-    """归一化「时间」字段值为 YYYY-MM-DD（兼容毫秒时间戳与 ISO 字符串两种返回形态）。"""
-    if value in (None, ""):
-        return ""
-    if isinstance(value, (int, float)):
-        from datetime import datetime, timezone, timedelta
-        return datetime.fromtimestamp(value / 1000, tz=timezone(timedelta(hours=8)))\
-            .strftime("%Y-%m-%d")
-    return str(value)[:10]
-
-
-def _bitable_ms(iso_date: str) -> int:
-    """ISO 日期 → 北京时间当日 0 点的毫秒时间戳（原生 API 日期字段要求 ms 数字，
-    字符串会报 1254064 DatetimeFieldConvFail；lark-cli 层会归一化，本地版不受影响）。"""
-    from datetime import datetime, timezone, timedelta
-    return int(datetime.strptime(iso_date, "%Y-%m-%d")
-               .replace(tzinfo=timezone(timedelta(hours=8))).timestamp() * 1000)
-
-
-def sync_to_bitable(iso_date: str, summaries: list[dict]) -> tuple[list[str], list[str], dict]:
-    """将当日小结写入日报多维表格「海外客服三组日报」并回写「同步状态」。
-
-    匹配规则：按成员姓名搜索行（姓名 select），再按「时间」字段日期匹配当日行；
-    有行 → 更新「今日工作情况」（覆盖）；无行 → 新建（时间+姓名+今日工作情况）。
-    「姓名」下拉无该成员选项 → 结构性跳过（与原 docx 无对应行行为一致）。
-    返回 (成功, 失败, 失败原因映射)。
-    """
-    app, table = config.DAILY_BITABLE_TOKEN, config.DAILY_BITABLE_TABLE
-    try:
-        name_options = feishu_api.field_options(app, table, config.DAILY_FIELD_NAME)
-    except Exception as e:  # noqa: BLE001
-        print(f"   [警告] 读取姓名选项失败（{e}），本轮跳过选项预检")
-        name_options = None
-
-    success, failed, err_map = [], [], {}
-    for s in summaries:
-        member = (s["fields"].get("成员") or "").strip()
-        text = s["fields"].get("小结") or ""
-        if not member or not text.strip():
-            continue
-        if name_options is not None and member not in name_options:
-            print(f"   [跳过] {member}: 日报表格「姓名」下拉无该成员选项（结构性跳过）")
-            continue
-        work_text = "\n".join(_split_items(text))
-        if not work_text:
-            continue
-        try:
-            rows = base_search(table,
-                               conditions=[{"field_name": config.DAILY_FIELD_NAME,
-                                            "operator": "is",
-                                            "value": [member]}],
-                               field_names=[config.DAILY_FIELD_DATE,
-                                            config.DAILY_FIELD_NAME,
-                                            config.DAILY_FIELD_WORK],
-                               app_token=app)
-            target = next((r for r in rows
-                           if _bitable_date(r["fields"].get(config.DAILY_FIELD_DATE)) == iso_date), None)
-            if target:
-                feishu_api.base_update(table, target["record_id"],
-                                       {config.DAILY_FIELD_WORK: work_text},
-                                       app_token=app)
-                print(f"   ✅ 更新日报行: {member} ({target['record_id']})")
-            else:
-                feishu_api.base_create(table, [{
-                    config.DAILY_FIELD_DATE: _bitable_ms(iso_date),
-                    # 单选字段必须传纯字符串（原生 API 传列表会报 1254062
-                    # SingleSelectFieldConvFail；lark-cli 层会归一化，本地版不受影响）
-                    config.DAILY_FIELD_NAME: member,
-                    config.DAILY_FIELD_WORK: work_text,
-                }], app_token=app)
-                print(f"   ✅ 新建日报行: {member}")
-            success.append(member)
-        except Exception as e:  # noqa: BLE001
-            failed.append(member)
-            err_map[member] = str(e)[:200]
-            print(f"   ❌ 写入日报多维表格失败 {member}: {e}")
-        # 回写同步状态（失败不中断其他成员）
-        if s.get("record_id"):
-            try:
-                feishu_api.base_update(config.SUMMARY_TABLE, s["record_id"],
-                                       {"同步状态": "已同步" if member in success
-                                        else "同步失败"})
-            except Exception as e:  # noqa: BLE001
-                print(f"   [回写失败] {member}: {e}")
-    return success, failed, err_map
-
-
 def run(mode: str, iso_date: str) -> int:
+    """纯提醒版（2026-09-08 起）：日报同步已永久下线，两个模式都只做检查+提醒。
+
+    退出码：0=全员已填(静默)或提醒全部发送成功  2=提醒发送失败(已群告警)  1=脚本异常
+    """
     summaries = fetch_summaries(iso_date)
     off = off_duty_members(iso_date)
     filled = {(s["fields"].get("成员") or "").strip() for s in summaries
@@ -169,26 +68,22 @@ def run(mode: str, iso_date: str) -> int:
     print(f"[状态] 在岗={on_duty} 已填={sorted(filled & set(on_duty))} "
           f"未填={missing} 不在岗跳过={sorted(off)}")
 
-    remind_failed = []
-    if mode == "check":
-        if missing:
-            print("[结果] 存在未填成员，仅提醒一轮（不同步）")
-            remind_failed = remind(missing, REMIND_1530)
-            return 0 if not remind_failed else 0  # 提醒失败仍视为本轮完成
-        print("[结果] 在岗全员已填齐，直接同步")
-    else:  # final
-        if missing:
-            remind_failed = remind(missing, REMIND_1730)
-        print("[结果] 执行兜底同步（空小结自动跳过）")
+    if not missing:
+        print("[结果] 在岗全员已填齐，静默结束（日报同步已于 2026-09-08 下线，不再写入）")
+        return 0
 
-    success, failed, err_map = sync_to_bitable(iso_date, summaries)
-    print(f"[同步] 成功={success} 失败={failed}")
+    if mode == "check":
+        text = (f"今日（{iso_date}）工作小结尚未提交，请尽快到[客服培训小组工作台]"
+                f"(https://workbuddy.link/p/RaP6fdiaAOnouYexyMBHcK)填写，今日 17:20 前完成，谢谢！")
+    else:
+        text = (f"今日（{iso_date}）工作小结尚未提交，请尽快到[客服培训小组工作台]"
+                f"(https://workbuddy.link/p/RaP6fdiaAOnouYexyMBHcK)填写，今天下班前完成，谢谢！（最后一轮提醒）")
+    failed = remind(missing, text)
     if failed:
-        detail = "；".join(f"{m}: {err_map.get(m, '')}" for m in failed[:3])
         config.send_alert(
-            f"🚨【每日小结同步部分失败】\n日期：{iso_date}\n失败成员：{('、'.join(failed))}\n"
-            f"错误详情：{detail}\n已回写「同步失败」状态，工作台看板可见。")
-        return 1
+            f"🚨【每日小结提醒发送失败】\n日期：{iso_date}\n成员：{'、'.join(failed)}\n请人工 @ 跟进。")
+        return 2
+    print(f"[结果] 已提醒 {len(missing)} 人（mode={mode}）")
     return 0
 
 
@@ -201,7 +96,7 @@ def main() -> int:
         return run(args.mode, args.date)
     except Exception as e:  # noqa: BLE001
         print(f"[错误] {e}", file=sys.stderr)
-        config.send_alert(f"🚨【小结同步脚本异常】模式 {args.mode} 日期 {args.date}\n{e}")
+        config.send_alert(f"🚨【小结提醒脚本异常】模式 {args.mode} 日期 {args.date}\n{e}")
         return 1
 
 
