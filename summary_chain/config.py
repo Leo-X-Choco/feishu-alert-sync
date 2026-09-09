@@ -12,6 +12,9 @@ SCHED_TABLE = os.environ.get("FEISHU_SCHED_TABLE", "tblVDbIezF6DSH6D")
 TAB_TABLE = os.environ.get("FEISHU_TAB_TABLE", "tbl37M2meI0EG3bM")
 QUEUE_TABLE = os.environ.get("FEISHU_QUEUE_TABLE", "tblSTXDvYP8rKlaC")
 
+# 新人考核基本信息表（2026-09-09 起，超期提醒数据源）
+EXAM_TABLE = os.environ.get("FEISHU_EXAM_TABLE", "tbl013TV9PFTT1Or")
+
 # 飞书日报多维表格「海外客服三组日报」（2026-09-07 起，替代原 docx 日报文档）
 # wiki 节点 OAuLw7z9Sixj9jkYoykcEgPinsh → base CixAbQERqaOifistxhIcdTkcnue
 DAILY_BITABLE_TOKEN = os.environ.get("FEISHU_DAILY_BITABLE", "CixAbQERqaOifistxhIcdTkcnue")
