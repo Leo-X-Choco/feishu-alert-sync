@@ -1,0 +1,37 @@
+name: Exam Overdue Reminder (09:00 CST)
+
+on:
+  workflow_dispatch:
+    inputs:
+      today:
+        description: "覆盖今天日期 YYYY-MM-DD（测试用，留空=今天）"
+        required: false
+        default: ""
+  schedule:
+    - cron: "0 1 * * *" # 09:00 北京时间（UTC+8）
+
+concurrency:
+  group: exam-overdue
+  cancel-in-progress: false
+
+jobs:
+  exam-overdue:
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.CLOUD_CHAIN_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+      FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+      FEISHU_ALERT_WEBHOOK: ${{ secrets.FEISHU_ALERT_WEBHOOK }}
+      FEISHU_BASE_TOKEN: Qd4ubeDLVazKBrspvMXcSY1Xn5c
+      FEISHU_EXAM_TABLE: tbl013TV9PFTT1Or
+      FEISHU_CHAT_ID: oc_485dd8d59a0115a43870c289994f429d
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Check overdue trainees & remind
+        run: python -m summary_chain.exam_overdue ${TODAY:+--today $TODAY}
+        env:
+          TODAY: ${{ inputs.today }}
