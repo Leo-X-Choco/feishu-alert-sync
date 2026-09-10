@@ -107,14 +107,27 @@ def build_alert_text(stage, cause, job_url=None):
     return "\n".join(lines)
 
 
-# 飞书服务端瞬时错误码（HTTP 200 但 code!=0，值得退避重试）：
+# 飞书服务端瞬时错误码（值得退避重试）：
 #   1255002  Bitable 服务端内部错误 "Something went wrong"（如 2026-09-04 12:59 那次读表失败）
-RETRYABLE_LARK_CODES = {1255002}
+#   1254607  Bitable "Data not ready, please try again later"（大表读取时数据未就绪，2026-09-10 11:36 两次触发）
+RETRYABLE_LARK_CODES = {1255002, 1254607}
+# 重试节奏：共 3 次尝试（首次 + 2 次重试），退避 5s / 15s
+RETRY_BACKOFF_SECONDS = (5, 15)
+
+
+def _extract_lark_code(body_text):
+    """从错误响应体中提取飞书业务错误码（HTTP 非 2xx 时 body 仍可能带 code 字段）。"""
+    try:
+        code = json.loads(body_text).get("code")
+        return code if isinstance(code, int) else None
+    except Exception:
+        return None
 
 
 def http_json(method, url, headers=None, payload=None):
     """发起 HTTP 请求，返回解析后的 JSON。
-    读超时/网络错误退避重试 1 次；飞书服务端瞬时错误码（RETRYABLE_LARK_CODES）同样退避重试 1 次。
+    读超时/网络错误、飞书瞬时错误码（RETRYABLE_LARK_CODES，含以 HTTP 4xx/5xx 形态
+    返回但 body 内 code 命中的情形）按 RETRY_BACKOFF_SECONDS 退避重试。
     """
     req = urllib.request.Request(url, method=method)
     req.add_header("Content-Type", "application/json; charset=utf-8")
@@ -125,27 +138,36 @@ def http_json(method, url, headers=None, payload=None):
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
 
     last_err = None
-    for attempt in range(2):  # 首次 + 1 次重试
+    for attempt in range(1 + len(RETRY_BACKOFF_SECONDS)):  # 首次 + 2 次重试
+        retryable_hit = False
         try:
             with urllib.request.urlopen(req, data=data, timeout=30) as resp:
                 result = json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
-            # HTTP 状态码错误是明确的业务错误，不重试，直接归类
             body = e.read().decode("utf-8", "ignore")
-            raise LarkError(f"HTTP {e.code}: {body[:500]}") from e
+            # HTTP 4xx/5xx 但 body 内 code 命中瞬时错误码（如 1254607 走 HTTP 400）→ 可重试
+            if _extract_lark_code(body) in RETRYABLE_LARK_CODES:
+                last_err = LarkError(f"HTTP {e.code}: {body[:500]}")
+                retryable_hit = True
+            else:
+                # 明确的业务错误，不重试，直接归类
+                raise LarkError(f"HTTP {e.code}: {body[:500]}") from e
         except (TimeoutError, urllib.error.URLError) as e:
-            # 读超时/网络抖动属临时性错误，退避 2 秒后重试 1 次
+            # 读超时/网络抖动属临时性错误
             last_err = e
-            if attempt == 0:
-                time.sleep(2)
+            retryable_hit = True
+
+        if retryable_hit:
+            if attempt < len(RETRY_BACKOFF_SECONDS):
+                time.sleep(RETRY_BACKOFF_SECONDS[attempt])
                 continue
             # 重试耗尽仍失败，转为 LarkError 以便上层归类到具体阶段
-            raise LarkError(f"请求超时/网络错误（已重试 1 次仍失败）: {last_err}") from last_err
+            raise LarkError(f"请求失败（已重试 {len(RETRY_BACKOFF_SECONDS)} 次仍失败）: {last_err}") from last_err
 
-        # 飞书服务端瞬时错误码（HTTP 200 但 code!=0）：退避 2 秒后重试 1 次
+        # HTTP 200 但 code 命中瞬时错误码：退避后重试
         if isinstance(result.get("code"), int) and result["code"] in RETRYABLE_LARK_CODES:
-            if attempt == 0:
-                time.sleep(2)
+            if attempt < len(RETRY_BACKOFF_SECONDS):
+                time.sleep(RETRY_BACKOFF_SECONDS[attempt])
                 continue
             # 重试耗尽：原样返回，由调用方按各自逻辑抛错（错误信息保持一致）
         return result
@@ -371,8 +393,73 @@ def ts_to_date_ms(ts_ms):
     return int(day_start.timestamp() * 1000)
 
 
-def fetch_existing_ids(token, base_token, table_id):
-    """读取表中全部消息ID，返回 set。"""
+def fetch_existing_ids(token, base_token, table_id, cutoff_ms=None):
+    """读取表中已有消息ID，返回 set。
+
+    优先增量模式（2026-09-10）：search 端点按「记录时间」倒序分页，读到早于
+    cutoff_ms 的记录即停——配合 48h lookback，把每轮 17+ 页全表扫描降为 1~2 页。
+    排序/过滤参数不被支持（如中文字段名 1254024）时回退全表扫描，保证正确性。
+    """
+    if cutoff_ms:
+        try:
+            return _fetch_existing_ids_incremental(token, base_token, table_id, cutoff_ms)
+        except LarkError as e:
+            print(f"[WARN] 增量读表失败，回退全表扫描: {str(e)[:200]}")
+        except Exception as e:
+            print(f"[WARN] 增量读表异常，回退全表扫描: {str(e)[:200]}")
+    return _fetch_existing_ids_fullscan(token, base_token, table_id)
+
+
+def _fetch_existing_ids_incremental(token, base_token, table_id, cutoff_ms):
+    """按「记录时间」倒序增量读取 lookback 窗口内的消息ID。"""
+    ids = set()
+    page_token = ""
+    url_base = (
+        f"{FEISHU_HOST}/open-apis/bitable/v1/apps/{base_token}/tables/{table_id}"
+        f"/records/search?page_size=500"
+    )
+    payload = {"sort": [{"field_name": "记录时间", "desc": True}]}
+    for _ in range(60):  # 安全上限：60 页 × 500 条
+        url = url_base
+        if page_token:
+            url += f"&page_token={urllib.parse.quote(page_token)}"
+        resp = http_json(
+            "POST", url,
+            headers={"Authorization": f"Bearer {token}"},
+            payload=payload,
+        )
+        if resp.get("code") != 0:
+            raise LarkError(f"增量读表失败: {resp}")
+        data = resp.get("data", {})
+        items = data.get("items", [])
+        for item in items:
+            mid = item.get("fields", {}).get("消息ID")
+            # search 端点文本字段返回 [{"text":..}] 数组形态（GET records 为纯字符串），归一化
+            if isinstance(mid, list):
+                mid = "".join(
+                    (x.get("text", "") if isinstance(x, dict) else str(x)) for x in mid
+                ) or None
+            if mid:
+                ids.add(mid)
+        # 倒序遍历：本页最末（最旧）一条已早于 cutoff → 窗口读完，停止翻页
+        oldest = None
+        for item in reversed(items):
+            ct = item.get("fields", {}).get("记录时间")
+            if isinstance(ct, (int, float)):
+                oldest = ct
+                break
+        if oldest is not None and oldest < cutoff_ms:
+            break
+        if not data.get("has_more"):
+            break
+        page_token = data.get("page_token", "")
+        if not page_token:
+            break
+    return ids
+
+
+def _fetch_existing_ids_fullscan(token, base_token, table_id):
+    """全量读取消息ID（兜底路径）。"""
     ids = set()
     page_token = ""
     while True:
@@ -474,9 +561,9 @@ def main():
                 break
         print(f"[INFO] 扫描消息 {scanned} 条，其中法务/侵权预警 {len(raw_alerts)} 条")
 
-        # 2. 读取已有消息ID做去重
+        # 2. 读取已有消息ID做去重（增量：仅读 lookback 窗口内；异常自动回退全表）
         stage = "读取表内已有记录"
-        existing = fetch_existing_ids(token, base_token, table_id)
+        existing = fetch_existing_ids(token, base_token, table_id, cutoff_ms=cutoff)
         print(f"[INFO] 表中已有 {len(existing)} 条记录（用于去重）")
 
         # 3. 解析并过滤新消息
