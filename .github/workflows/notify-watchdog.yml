@@ -1,0 +1,53 @@
+name: Notify Watchdog (18:15 CST)
+
+# 提醒链路看门狗 —— 专治「该跑没跑、群里静悄悄」。
+# 每天 18:15（17:30 末轮之后）核对当日三个提醒 workflow 是否都成功执行过，
+# 缺失 / 失败 / 被取消 → 立刻向群告警；避免「提醒停了却没人发现」。
+# 为排除 GitHub 定时任务的常见延迟，发现异常会先等 10 分钟复查再告警。
+# 手动触发可指定历史日期做回溯核对（workflow_dispatch + date）。
+
+on:
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "YYYY-MM-DD（留空=今天；可用于回溯核对）"
+        required: false
+        default: ""
+  schedule:
+    - cron: "15 10 * * *" # 18:15 北京时间（UTC+8）
+
+concurrency:
+  group: notify-watchdog
+  cancel-in-progress: false
+
+permissions:
+  actions: read # 读取 workflow 运行记录（判断是否跑过/成功）
+  contents: read
+
+jobs:
+  watchdog:
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.CLOUD_CHAIN_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+      FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+      FEISHU_ALERT_WEBHOOK: ${{ secrets.FEISHU_ALERT_WEBHOOK }}
+      FEISHU_CHAT_ID: oc_485dd8d59a0115a43870c289994f429d
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      RUN_DATE: ${{ inputs.date }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Check today's reminders
+        run: python -m summary_chain.alerting --watchdog ${RUN_DATE:+--date $RUN_DATE} --recheck-delay 600
+
+      - name: Alert on failure
+        if: failure()
+        run: |
+          curl -sS -X POST "$FEISHU_ALERT_WEBHOOK" \
+            -H "Content-Type: application/json" \
+            -d "{\"msg_type\":\"text\",\"content\":{\"text\":\"🚨【提醒看门狗自身执行失败】\\n任务：${{ github.workflow }}\\n日志：https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}}" || true

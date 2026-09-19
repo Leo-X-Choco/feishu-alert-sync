@@ -7,6 +7,11 @@ on:
         description: "YYYY-MM-DD（留空=今天；测试时可填历史日期）"
         required: false
         default: ""
+      dry_run:
+        description: "只演练不实际发消息（排障用）"
+        required: false
+        type: boolean
+        default: false
   schedule:
     - cron: "0 2 * * *" # 10:00 北京时间（UTC+8）
 
@@ -31,14 +36,30 @@ jobs:
       FEISHU_DAILY_DOC: GlpCduwAropB88xvWpLcuEFinff
       FEISHU_CHAT_ID: oc_485dd8d59a0115a43870c289994f429d
       RUN_DATE: ${{ inputs.date }}
+      RUN_DRY: ${{ inputs.dry_run }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
       - name: Send reminders (duty-checked)
-        run: python -m summary_chain.praise_reminder --mode send ${RUN_DATE:+--date $RUN_DATE}
+        run: |
+          ARGS="--mode send"
+          if [ -n "$RUN_DATE" ]; then ARGS="$ARGS --date $RUN_DATE"; fi
+          if [ "$RUN_DRY" = "true" ]; then ARGS="$ARGS --dry-run"; fi
+          python -m summary_chain.praise_reminder $ARGS
       - name: Wait 20 minutes for read
+        if: ${{ env.RUN_DRY != 'true' }}
         run: sleep 1200
       - name: Verify reads, resend unread
-        run: python -m summary_chain.praise_reminder --mode verify ${RUN_DATE:+--date $RUN_DATE}
+        if: ${{ env.RUN_DRY != 'true' }}
+        run: |
+          ARGS="--mode verify"
+          if [ -n "$RUN_DATE" ]; then ARGS="$ARGS --date $RUN_DATE"; fi
+          python -m summary_chain.praise_reminder $ARGS
+      - name: Alert on failure
+        if: failure()
+        run: |
+          curl -sS -X POST "$FEISHU_ALERT_WEBHOOK" \
+            -H "Content-Type: application/json" \
+            -d "{\"msg_type\":\"text\",\"content\":{\"text\":\"🚨【云端提醒任务执行失败】\\n任务：${{ github.workflow }}\\n日志：https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}}" || true
