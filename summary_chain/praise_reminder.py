@@ -8,8 +8,11 @@
              跳过已读校验与未读补发（与本地生产版一致）；仅报告历史发送失败项。
              含 message_id 的历史 state（im 通道）仍走已读校验+补发。
 
-在岗判定：排班表当日状态 ∈ {休息,请假,节假日} → 不在岗跳过；
-         无记录或其他状态 → 在岗照常提醒。全员不在岗 → 静默结束(0)。
+在岗判定（2026-09-19 起）：统一走 duty.pushable_members()——推送白名单
+         {正常上班/加班/节假日加班}；「团建外出」计入出勤但不提醒；
+         工作日无记录＝默认正常上班；周末/法定节假日无记录＝不在岗；
+         法定节假日由 config.HOLIDAYS 兜底。全员不可推送 → 静默结束(0)。
+         🔴 旧实现用 (休息/请假/节假日) 黑名单，漏判「事假」等 v39 新状态。
 退出码：0=成功/静默结束  2=存在发送失败(已群告警)  1=出错
 """
 
@@ -18,7 +21,7 @@ import json
 import os
 import sys
 
-from . import config, feishu_api
+from . import alerting, config, duty, feishu_api
 from .feishu_api import base_search
 
 STATE_FILE = os.environ.get("PRAISE_STATE_FILE", "praise_state.json")
@@ -41,28 +44,37 @@ def load_targets() -> list[str]:
 
 
 def off_duty_members(iso_date: str) -> set[str]:
-    recs = base_search(config.SCHED_TABLE,
-                       conditions=[{"field_name": "日期", "operator": "is",
-                                    "value": [iso_date]}],
-                       field_names=["成员", "状态", "日期"])
-    off = set()
-    for r in recs:
-        f = r["fields"]
-        member = (f.get("成员") or "").strip()
-        status = (f.get("状态") or "").strip()
-        if member and status in config.OFF_DUTY_STATUSES:
-            off.add(member)
-    return off
+    """【已弃用】当日不可推送成员（= 名单 − 可推送）；保留仅为兼容旧调用。
+
+    判定已统一到 duty.pushable_members()，勿再使用旧黑名单 config.OFF_DUTY_STATUSES。
+    """
+    pushable, _alerts = duty.pushable_members(iso_date, members=config.MEMBERS)
+    return {m for m in config.MEMBERS if m not in pushable}
 
 
-def mode_send(iso_date: str) -> int:
+def mode_send(iso_date: str, dry_run: bool = False) -> int:
     owners = load_targets()
-    off = off_duty_members(iso_date)
-    targets = [m for m in owners if m not in off]
-    skipped = [m for m in owners if m in off]
-    print(f"[目标] 负责人={owners} 不在岗跳过={skipped} 待提醒={targets}")
+    pushable, alerts = duty.pushable_members(iso_date, members=config.MEMBERS)
+    for a in alerts:
+        print(f"   [排班告警] {a}")
+    hard = [a for a in alerts if ("重复排班记录" in a or "名单外成员" in a)]
+    if hard:
+        alerting.send_alert(f"🚨【排班数据异常】{iso_date}\n"
+                            + "\n".join("· " + a for a in hard))
+    # 选项卡表读不到 10:00 目标 → 配置缺失，主动告警（否则该轮静默空转、无人察觉）
+    if not owners:
+        alerting.send_alert(
+            f"🚨【好评提醒无目标】{iso_date}\n"
+            f"选项卡表「{config.PRAISE_TAB_NAME}」未配置「提醒时间={config.PRAISE_REMIND_TIME}」"
+            f"的负责人，本轮 10:00 好评提醒将空转，请检查选项卡配置。")
+    targets = [m for m in owners if m in pushable]
+    skipped = [m for m in owners if m not in pushable]
+    print(f"[目标] 负责人={owners} 不推送跳过={skipped} 待提醒={targets}")
     if not targets:
-        print("[结果] 无在岗目标，静默结束")
+        print("[结果] 无可推送目标，静默结束")
+        return 0
+    if dry_run:
+        print(f"[dry-run] 本应提醒 {len(targets)} 人：{targets}（不实际发送）")
         return 0
 
     state, failures = {"date": iso_date, "channel": "webhook", "sends": []}, []
@@ -140,9 +152,12 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--mode", choices=["send", "verify"], required=True)
     ap.add_argument("--date", default=config.iso_today_cst())
+    ap.add_argument("--dry-run", action="store_true",
+                    help="只打印本应提醒谁，不实际发送（排障/演练用）")
     args = ap.parse_args()
     try:
-        return mode_send(args.date) if args.mode == "send" else mode_verify(args.date)
+        return (mode_send(args.date, dry_run=args.dry_run) if args.mode == "send"
+                else mode_verify(args.date))
     except Exception as e:  # noqa: BLE001
         print(f"[错误] {e}", file=sys.stderr)
         config.send_alert(f"🚨【好评提醒脚本异常】日期 {args.date}\n{e}")
