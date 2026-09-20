@@ -34,6 +34,7 @@ const ALLOWED = {
     "tbl013TV9PFTT1Or", // 考核基本信息
     "tblEi5eafUHFZiXA", // 考核阶段规划
     "tblqsfGvFBIKY6V1", // 考核实操评分
+    "tbll3quUt1f6V9zL", // 登录账号（密码哈希集中存储，v23）
   ]),
   // 海外客服三组日报（小结同步目标）
   CixAbQERqaOifistxhIcdTkcnue: new Set(["tbl7oMLDrYaWRGwd"]),
