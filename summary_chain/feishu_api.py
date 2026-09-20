@@ -3,6 +3,7 @@
 
 import json
 import os
+import sys
 import time
 import urllib.request
 import urllib.error
@@ -82,6 +83,18 @@ def base_search(table_id: str, conditions: list[dict] | None = None,
     app_token 缺省用「客服小组工作数据」Base；跨 Base（如日报多维表格）时显式传入。
     """
     app = app_token or config.BASE_TOKEN
+    # v46（2026-09-20）起：本 Base 的 15 张业务表已迁到 Cloudflare D1，读优先走 D1。
+    # 「客服小组工作数据」以外（跨 Base，如日报多维表格）仍走飞书 OpenAPI。
+    # 未配置 WB_PROXY_TOKEN、或 D1 侧报错/遇到未支持算子 → d1_db 返回 None，自动回退。
+    if app == config.BASE_TOKEN:
+        try:
+            from . import d1_db
+            if d1_db.enabled():
+                recs = d1_db.search_records(table_id, conditions, field_names)
+                if recs is not None:
+                    return recs
+        except Exception as e:  # noqa: BLE001
+            print(f"[feishu_api] D1 读失败，回退飞书：{e}", file=sys.stderr)
     out, page_token = [], ""
     while True:
         body = {"page_size": 500}
