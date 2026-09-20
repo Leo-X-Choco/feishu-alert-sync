@@ -2,9 +2,11 @@
 """云端提醒链路整体校验（推送前必跑）。
 
 覆盖：
-  ① 5 个 workflow 的 YAML 结构可解析，关键元素齐全
+  ① 6 个 workflow 的 YAML 结构可解析，关键元素齐全
      （失败告警步骤、dry-run 输入、看门狗权限/cron、总开关）
-  ② 5 个 python 模块语法可编译
+  ①b 数据通道注入：跑 D1 读取模块的 workflow 必须显式注入 WB_PROXY_TOKEN
+     （GitHub secret 不会自动进 job；漏注入 → 云端静默回退飞书 → 与页面脑裂）
+  ② 9 个 python 模块语法可编译
   ③ 回归：在岗判定单测 + 整链路 dry-run（含 --dry-run 不发送断言）
 
 运行：
@@ -116,9 +118,42 @@ if wd:
     t("看门狗含失败告警步骤", has_failure_alert(wd))
 
 log("")
+log("=== ①b 数据通道注入（D1 切换 2026-09-20） ===")
+# 🔴 背景：主 Base 的 15 张业务表已迁 Cloudflare D1，云端读优先走 D1。判定条件是
+#    `d1_db.enabled()`（有 WB_PROXY_TOKEN 且首选目标不是 feishu）。**GitHub secret
+#    不会自动出现在 job 里**，必须在 env: 显式声明；漏了就会静默回退飞书旧库，
+#    而页面（v46）已读写 D1 → 脑裂且无任何报错。故此处把它固化成回归断言。
+NEED_TOKEN_WF = ["exam-overdue.yml", "praise-reminder.yml",
+                 "summary-check.yml", "summary-final-sync.yml"]
+for fn in NEED_TOKEN_WF:
+    d = parsed.get(fn)
+    if not d:
+        continue
+    envs = [(j.get("env") or {}) for j in (d.get("jobs") or {}).values()]
+    t("WF 注入 WB_PROXY_TOKEN %s" % fn,
+      bool(envs) and all("WB_PROXY_TOKEN" in e for e in envs),
+      [sorted(e.keys()) for e in envs])
+    t("WF 密钥引用形式 %s" % fn,
+      all(e.get("WB_PROXY_TOKEN") == "${{ secrets.WB_PROXY_TOKEN }}" for e in envs))
+    t("WF 含通道自检步骤 %s" % fn,
+      any(str(s.get("name") or "").startswith("Data channel self-check")
+          for s in steps_of(d)))
+
+# 绝不把代理密钥明文写进仓库（long-lived token 形如 48 位小写十六进制）
+import re as _re  # noqa: E402
+
+for fn in ALL_WF:
+    p = os.path.join(WF_DIR, fn)
+    if not os.path.isfile(p):
+        continue
+    raw = open(p, encoding="utf-8").read()
+    t("WF 无密钥明文 %s" % fn, not _re.search(r"\b[0-9a-f]{40,}\b", raw))
+
+log("")
 log("=== ② python 语法编译 ===")
 MODS = ["duty.py", "alerting.py", "config.py", "summary_chain.py",
-        "praise_reminder.py", "feishu_api.py", "queue_consumer.py"]
+        "praise_reminder.py", "feishu_api.py", "queue_consumer.py",
+        "d1_db.py", "exam_overdue.py"]
 for m in MODS:
     src = os.path.join(ROOT, "summary_chain", m)
     try:

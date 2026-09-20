@@ -26,11 +26,17 @@ jobs:
       FEISHU_BASE_TOKEN: Qd4ubeDLVazKBrspvMXcSY1Xn5c
       FEISHU_EXAM_TABLE: tbl013TV9PFTT1Or
       FEISHU_CHAT_ID: oc_485dd8d59a0115a43870c289994f429d
+      # 2026-09-20：主 Base 的 15 张业务表已迁 Cloudflare D1，云端读优先走 D1。
+      # 未配置该 secret 时 d1_db.enabled() 为 False，自动回退旧飞书通道（回滚开关）。
+      WB_PROXY_TOKEN: ${{ secrets.WB_PROXY_TOKEN }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+      - name: Data channel self-check
+        run: |
+          python -c "from summary_chain import d1_db as d; print('[channel] d1_enabled=%s targets=%s token_len=%d' % (d.enabled(), d.TARGETS, len(d.TOKEN)))"
       - name: Check overdue trainees & remind
         run: python -m summary_chain.exam_overdue ${TODAY:+--today $TODAY}
         env:
