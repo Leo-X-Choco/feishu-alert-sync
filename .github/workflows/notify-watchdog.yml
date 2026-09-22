@@ -13,6 +13,12 @@ on:
         description: "YYYY-MM-DD（留空=今天；可用于回溯核对）"
         required: false
         default: ""
+  # 🟡 2026-09-22：其余 5 个 workflow 的 schedule 已停用（GitHub 整仓 schedule 被限流），
+  #    本 workflow 的 schedule【刻意保留】作为最后一道兜底监控 —— 万一外部调度器
+  #    （CF Worker patrol-trigger / 本机 patrol_daemon）整体失效，GitHub 这边的
+  #    定时任务哪怕迟到几小时，也能发出「该跑没跑」的告警。
+  #    代价：外部调度器正常时本 workflow 可能一天跑两次，看门狗幂等（只在缺失时告警），
+  #    最多造成一次重复告警，可接受。
   schedule:
     - cron: "15 10 * * *" # 18:15 北京时间（UTC+8）
 

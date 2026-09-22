@@ -12,8 +12,15 @@ on:
         required: false
         type: boolean
         default: false
-  schedule:
-    - cron: "0 2 * * *" # 10:00 北京时间（UTC+8）
+  # 🔴 2026-09-22 停用 schedule：GitHub 对本仓 schedule 事件的放行率自 09-19 起崩塌
+  #    （实测提醒延迟 4~7 小时、法务同步触发次数从 88/天 掉到 2/天，排队任务还会被丢弃）。
+  #    改由外部调度器按点调 workflow_dispatch API 触发：
+  #      · Cloudflare Worker `patrol-trigger`（主通道）
+  #      · 本机 patrol_daemon.py（兜底通道）
+  #    计划时刻：10:00 CST（原 cron: "0 2 * * *"）
+  #    回滚：取消下面两行注释（注意会与 dispatch 触发产生重复运行）。
+  # schedule:
+  #   - cron: "0 2 * * *" # 10:00 北京时间（UTC+8）
 
 concurrency:
   group: praise-reminder

@@ -1,17 +1,26 @@
 name: sync-feishu-alerts
 
 # 触发方式：
-# 1. 定时触发（每 30 分钟一次，cron: "*/30 * * * *"）
-#    ⚠️ 2026-09-21 由 "*/10" 放宽为 "*/30"：该 cron 原为全仓最高频计划任务
-#       （144 次/天，占全仓 schedule 事件 95%+），实测触发 GitHub 对整仓的
-#       schedule 节流 —— 同日 09:00/10:00 提醒被延迟 4h39m/5h22m、15:30 与
-#       17:30 两个小结提醒直接未运行。降频以减轻整仓 schedule 负载。
-#       安全性：sync_alerts.py 走 LOOKBACK_HOURS=48 窗口拉取，30 分钟周期
-#       远小于回看窗口，不会漏数据，仅预警发现延迟略增。
+# 1. 外部调度器按点调 workflow_dispatch API（2026-09-22 起的主通道）：
+#    · Cloudflare Worker `patrol-trigger`（主通道，每 30 分钟）
+#    · 本机 patrol_daemon.py（兜底通道，先查当天是否已跑，未跑才补触发）
 # 2. 手动触发：仓库 Actions 页面 -> 本工作流 -> Run workflow
+#
+# 🔴 2026-09-22 停用 GitHub schedule（原 cron: "*/30 * * * *"）：
+#    —— 09-21 那次 "*/10" → "*/30" 降频【已被证伪】：降频后反而更差，说明瓶颈
+#       不是本工作流的频率，而是 GitHub 对整仓 schedule 事件的放行率崩塌。
+#    实测（3 日对照）：
+#      · 提醒延迟：09-16~09-18 仅 2~11 分钟 → 09-22 好评提醒 +4h59m，15:30 / 17:30 未跑
+#      · 本工作流触发次数：80/82/88 次/天 → 26 → 7 → 5 → 2 次/天（应 48）
+#      · 看门狗自身：09-21 迟到 6h12m 且执行失败
+#      · 决定性对照：schedule 延迟 4h59m；workflow_dispatch 仅 1 秒（15:03:56 发出
+#        → 15:03:57 落地，HTTP 204）⇒ 解法 = 外部调度器到点调 dispatch API
+#    安全性：sync_alerts.py 走 LOOKBACK_HOURS=48 窗口 + 按消息 ID 去重，
+#            幂等、重复运行安全，调度中断后补跑不会漏数据也不会重复入库。
+#    回滚：取消下面两行注释（注意会与 dispatch 触发产生重复运行）。
 on:
-  schedule:
-    - cron: "*/30 * * * *"
+  # schedule:
+  #   - cron: "*/30 * * * *"
   workflow_dispatch:
 
 permissions:

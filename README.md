@@ -6,7 +6,7 @@
 
 ## 功能特性
 
-- **定时同步**：GitHub Actions cron 调度（`*/10`），无需自建服务器
+- **定时同步**：由**外部调度器**到点调 GitHub `workflow_dispatch` API 触发 —— 主通道为 Cloudflare Worker `patrol-trigger`（每 5 分钟唤醒、按点下发），兜底通道为本机 `patrol_daemon.py`。GitHub 自身的 `schedule` 已于 2026-09-22 停用（实测整仓 schedule 被限流：提醒延迟 4~7 小时、本 workflow 触发次数从 88/天 掉到 2/天，而 `workflow_dispatch` 延迟仅 1 秒）
 - **原始卡片解析**：使用 `card_msg_content_type=user_card_content` 拉取发送时的原始卡片 JSON（2.0 结构），可提取「查看详情」按钮的跳转链接（`behaviors[].default_url`）
 - **幂等去重**：以消息 `message_id` 去重，重复运行安全
 - **失败自愈**：读超时/网络错误自动重试；飞书服务端瞬时错误码（如 `1255002`）退避重试
@@ -30,7 +30,9 @@
 3. 在多维表格中按脚本字段建表（记录时间 / 发件人 / 主题 / 命中规则 / Hit_Score / 法务类别 / 置信度 / 理由摘要 / 详情链接 / 消息ID / 消息链接）
 4. 触发一次 **Run workflow** 验证，之后定时自动同步
 
-> 注意：私有仓库有 Actions 分钟数额度限制，高频 cron 建议使用公开仓库或自建 runner。
+> 注意：私有仓库有 Actions 分钟数额度限制，高频调度建议使用公开仓库或自建 runner。
+>
+> 调度说明：本仓库的定时触发**不依赖 GitHub `schedule`**（该机制在本账号下已被平台限流），而是由外部调度器调用 `workflow_dispatch`。因此本 workflow 的调度周期**不由本仓库的 cron 决定** —— 修改周期需要改外部调度器（Cloudflare Worker `patrol-trigger` 与本机 `patrol_daemon.py`）里的时刻表。
 
 ## 许可与版权
 
