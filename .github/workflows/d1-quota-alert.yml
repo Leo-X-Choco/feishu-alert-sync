@@ -1,0 +1,64 @@
+name: D1 Quota Alert (hourly)
+
+# 目的：D1 免费额度（rowsRead 5,000,000/天）巡检的**云端兜底**，消除「本机夜间关机」盲区。
+#   背景：本机版（工作区 outputs/d1_quota_alert.py 接入 patrol_daemon）只在开机时生效；
+#         2026-09-24 的 109.8% 超限发生在 19:01 之后（本机已关机）⇒ 实时告警从未发出。
+#   本 workflow 只做「当日判定 + 同日同级幂等（级别可升级）」，跨运行状态用 actions/cache 持久化。
+#   查询走 Cloudflare GraphQL Analytics（元数据，**不消耗 D1 行读额度**）。
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "只演练不发送（排障用）"
+        required: false
+        type: boolean
+        default: false
+  # 🔴 不用 schedule：本仓 schedule 事件自 2026-09-19 起被 GitHub 限流
+  #    （实测提醒延迟 4~7 小时、排队任务会被丢弃）。额度超限往往几小时内就打满，
+  #    迟到等于无效 ⇒ 改由外部调度器按点调 workflow_dispatch：
+  #      · Cloudflare Worker `patrol-trigger`（主通道，每小时整点窗口）
+  #      · 本机 patrol_daemon.py 的额度通道（兜底，本机开机时）
+  # schedule:
+  #   - cron: "5 * * * *"
+
+concurrency:
+  group: d1-quota-alert
+  cancel-in-progress: false
+
+jobs:
+  quota:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # CF_API_TOKEN 只需「账号 Analytics 只读」——最小权限，勿复用可写 token
+      CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+      CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+      FEISHU_ALERT_WEBHOOK: ${{ secrets.FEISHU_ALERT_WEBHOOK }}
+      QUOTA_STATE_DIR: .quota_state
+      QUOTA_DRY_RUN: ${{ inputs.dry_run == true && '1' || '' }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      # 跨运行状态：Actions 每次都是全新容器 ⇒ 用 cache 把 state.json 带过来。
+      #   restore-keys 取「最新一份 d1-quota-*」；save 用 run_id 造唯一 key（不复用旧 key）。
+      - uses: actions/cache/restore@v4
+        with:
+          path: .quota_state
+          key: d1-quota-${{ github.run_id }}
+          restore-keys: d1-quota-
+      - name: Check D1 rowsRead quota
+        run: python d1_quota_alert.py
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: .quota_state
+          key: d1-quota-${{ github.run_id }}
+      - name: Alert on failure
+        if: failure()
+        run: |
+          curl -sS -X POST "$FEISHU_ALERT_WEBHOOK" \
+            -H "Content-Type: application/json" \
+            -d "{\"msg_type\":\"text\",\"content\":{\"text\":\"🚨【云端 D1 额度巡检自身失败】\n日志：https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}}" || true
