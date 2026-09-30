@@ -1,0 +1,32 @@
+name: D1 Readonly Check (manual)
+
+# 只读数据查证（排障用，手动触发）：本机到 api.cloudflare.com 证书被劫持时，
+# 用境外 runner 直连 D1 REST 核对近期数据。仅 SELECT，零写入，不发任何通知。
+on:
+  workflow_dispatch:
+    inputs:
+      since:
+        description: "明细起始日 YYYY-MM-DD"
+        required: false
+        type: string
+        default: "2026-09-24"
+
+concurrency:
+  group: d1-readonly-check
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+      CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+      SINCE: ${{ inputs.since }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Readonly D1 data check
+        run: python d1_readonly_check.py
