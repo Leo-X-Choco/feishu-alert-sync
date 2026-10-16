@@ -72,7 +72,7 @@ def has_failure_alert(d: dict) -> bool:
 
 # ---------------------------------------------------------------------------
 log("=== ① workflow YAML 结构 ===")
-ALL_WF = ["sync-alerts.yml", "exam-overdue.yml", "praise-reminder.yml",
+ALL_WF = ["sync-alerts.yml", "exam-overdue.yml", "tab-reminder.yml",
           "summary-check.yml", "summary-final-sync.yml", "notify-watchdog.yml"]
 parsed: dict[str, dict] = {}
 for fn in ALL_WF:
@@ -87,7 +87,7 @@ for fn in ALL_WF:
     except Exception as e:  # noqa: BLE001
         t("WF 可解析 %s" % fn, False, repr(e))
 
-REMIND_WF = ["praise-reminder.yml", "summary-check.yml", "summary-final-sync.yml"]
+REMIND_WF = ["tab-reminder.yml", "summary-check.yml", "summary-final-sync.yml"]
 for fn in REMIND_WF:
     d = parsed.get(fn)
     if not d:
@@ -123,7 +123,7 @@ log("=== ①b 数据通道注入（D1 切换 2026-09-20） ===")
 #    `d1_db.enabled()`（有 WB_PROXY_TOKEN 且首选目标不是 feishu）。**GitHub secret
 #    不会自动出现在 job 里**，必须在 env: 显式声明；漏了就会静默回退飞书旧库，
 #    而页面（v46）已读写 D1 → 脑裂且无任何报错。故此处把它固化成回归断言。
-NEED_TOKEN_WF = ["exam-overdue.yml", "praise-reminder.yml",
+NEED_TOKEN_WF = ["exam-overdue.yml", "tab-reminder.yml",
                  "summary-check.yml", "summary-final-sync.yml"]
 for fn in NEED_TOKEN_WF:
     d = parsed.get(fn)
@@ -152,7 +152,7 @@ for fn in ALL_WF:
 log("")
 log("=== ② python 语法编译 ===")
 MODS = ["duty.py", "alerting.py", "config.py", "summary_chain.py",
-        "praise_reminder.py", "feishu_api.py", "queue_consumer.py",
+        "tab_reminder.py", "feishu_api.py", "queue_consumer.py",
         "d1_db.py", "exam_overdue.py"]
 for m in MODS:
     src = os.path.join(ROOT, "summary_chain", m)
@@ -166,7 +166,8 @@ log("")
 log("=== ③ 回归测试（子进程） ===")
 for script, label in (("test_duty_cloud.py", "在岗判定单测"),
                       ("test_chain_dryrun.py", "整链路 dry-run"),
-                      ("test_alerting.py", "监控报警单测")):
+                      ("test_alerting.py", "监控报警单测"),
+                      ("test_tab_reminder.py", "任务提醒引擎单测")):
     p = os.path.join(ROOT, "tests", script)
     r = subprocess.run([PY, p], capture_output=True, text=True, encoding="utf-8")
     tail = (r.stdout or "").strip().splitlines()[-1:] or [""]

@@ -44,8 +44,10 @@ CST = timezone(timedelta(hours=8))
 GROUP_NAME = "海外客服三组"
 
 # 每日必须成功执行的「提醒类」workflow（file → 可读名称）
+# 🔴 2026-10-16：好评提醒（praise-reminder.yml 10:00）按需求下线 —— 由
+#    tab-reminder.yml（每 5 分钟窗口的通用任务提醒引擎）替代；引擎每次运行
+#    自带失败群告警，且非「固定时刻」型任务，故不在看门狗固定时刻核对范围。
 EXPECTED_WORKFLOWS = [
-    ("praise-reminder.yml", "10:00 好评提醒"),
     ("summary-check.yml", "15:30 小结提醒（首轮）"),
     ("summary-final-sync.yml", "17:30 小结提醒（末轮）"),
 ]
@@ -53,7 +55,6 @@ EXPECTED_WORKFLOWS = [
 # 各提醒的「期望时刻」（CST HH:MM）—— 判断"这一天是否已经跑到该提醒的点"用。
 # ⚠️ 新增提醒项时**必须**在这里登记；漏登记会让「未到点豁免」失效（提前判死 ⇒ 误报）。
 EXPECTED_AT = {
-    "praise-reminder.yml": "10:00",
     "summary-check.yml": "15:30",
     "summary-final-sync.yml": "17:30",
 }

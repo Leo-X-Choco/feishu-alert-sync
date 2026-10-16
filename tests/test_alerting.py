@@ -240,17 +240,19 @@ t("T3b 指定今天且未到点 → 不回退、全 pending、不告警",
 
 log("")
 log("=== 10) 未到点豁免（当日部分到点） ===")
-# CST 09-29 11:00：10:00 项已到点（+20 分宽容后），15:30/17:30 尚未到点。
-# 10:00 项真缺 ⇒ 只应点名 10:00，不得把未到点的两项也算成异常。
-ONLY_1000_MISS = {"2026-09-29": {WF_CHECK: [OKRUN], WF_FINAL: [OKRUN]}}
+# 🔴 2026-10-16：好评提醒（10:00）下线 ⇒ 原「11:00 时 10:00 项缺失」场景不复存在，
+#    改用仍在册的 15:30 项做同等辨别力对照。
+# CST 09-29 16:00：15:30 项已到点（+20 分宽容后），17:30 尚未到点。
+# 15:30 项真缺 ⇒ 只应点名 15:30，不得把未到点的 17:30 也算成异常。
+ONLY_1530_MISS = {"2026-09-29": {WF_CHECK: []}}
 alerts.clear()
-with mock.patch.object(alerting, "workflow_runs", side_effect=day_runs(ONLY_1000_MISS)), \
+with mock.patch.object(alerting, "workflow_runs", side_effect=day_runs(ONLY_1530_MISS)), \
      mock.patch.object(alerting, "send_alert", side_effect=fake_alert):
     rc = alerting.watchdog("2026-09-29", repo="o/r", token="t", recheck_delay=0,
-                           now=at(2026, 9, 29, 11, 0))
-t("T4 已到点项缺失 → 告警且只点名 10:00",
-  rc == 0 and len(alerts) == 1 and "10:00" in alerts[0]
-  and "15:30" not in alerts[0] and "17:30" not in alerts[0],
+                           now=at(2026, 9, 29, 16, 0))
+t("T4 已到点项缺失 → 告警且只点名 15:30",
+  rc == 0 and len(alerts) == 1 and "15:30" in alerts[0]
+  and "17:30" not in alerts[0] and "10:00" not in alerts[0],
   "rc=%s alerts=%s" % (rc, alerts[:1]))
 
 # 09:50（10:00 还没到 +20 分宽容）⇒ 三项全 pending ⇒ 不告警

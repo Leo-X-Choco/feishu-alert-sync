@@ -85,9 +85,8 @@ STRUCTURAL_SKIP = {"许磊"}
 NAME_COLUMN = "姓名"
 WORK_COLUMN = "今日工作情况"
 
-# 好评提醒目标选项卡
-PRAISE_TAB_NAME = "好评相关"
-PRAISE_REMIND_TIME = "10:00"
+# 🔴 2026-10-16：好评提醒（PRAISE_TAB_NAME / PRAISE_REMIND_TIME）随 praise-reminder.yml
+#    一并下线；工作安排的「提醒时间」由 tab_reminder.py 通用引擎按各任务自己的时间触发。
 
 
 def iso_today_cst() -> str:
