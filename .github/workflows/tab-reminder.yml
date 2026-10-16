@@ -1,0 +1,57 @@
+name: Task Reminder (每 5 分钟窗口)
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "只演练不实际发消息（排障用）"
+        required: false
+        type: boolean
+        default: false
+
+# 由 Cloudflare Worker `patrol-trigger` 每 5 分钟 dispatch（主通道）。
+# 🔴 2026-10-16：替代原 praise-reminder.yml（好评提醒按需求下线）——
+#    本引擎按各任务自己的「提醒时间」窗口触发（≤5 分钟内送达），
+#    文案通用、不含业务专称；窗口以上一次运行为界 ⇒ 天然幂等。
+concurrency:
+  group: tab-reminder
+  cancel-in-progress: false
+
+jobs:
+  tab-reminder:
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.CLOUD_CHAIN_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read   # 查询本 workflow 上一次运行时刻（窗口起点）
+    env:
+      FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+      FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+      FEISHU_ALERT_WEBHOOK: ${{ secrets.FEISHU_ALERT_WEBHOOK }}
+      FEISHU_BASE_TOKEN: Qd4ubeDLVazKBrspvMXcSY1Xn5c
+      FEISHU_TAB_TABLE: tbl37M2meI0EG3bM
+      FEISHU_CHAT_ID: oc_485dd8d59a0115a43870c289994f429d
+      # 2026-09-20：主 Base 的 15 张业务表已迁 Cloudflare D1，云端读优先走 D1。
+      WB_PROXY_TOKEN: ${{ secrets.WB_PROXY_TOKEN }}
+      GITHUB_REPO: ${{ github.repository }}
+      GITHUB_TOKEN: ${{ github.token }}
+      RUN_DRY: ${{ inputs.dry_run }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Data channel self-check
+        run: |
+          python -c "from summary_chain import d1_db as d; print('[channel] d1_enabled=%s targets=%s token_len=%d' % (d.enabled(), d.TARGETS, len(d.TOKEN)))"
+      - name: Send due-task reminders
+        run: |
+          ARGS=""
+          if [ "$RUN_DRY" = "true" ]; then ARGS="$ARGS --dry-run"; fi
+          python -m summary_chain.tab_reminder $ARGS
+      - name: Alert on failure
+        if: failure()
+        run: |
+          curl -sS -X POST "$FEISHU_ALERT_WEBHOOK" \
+            -H "Content-Type: application/json" \
+            -d "{\"msg_type\":\"text\",\"content\":{\"text\":\"🚨【任务提醒引擎执行失败】\\n任务：${{ github.workflow }}\\n日志：https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}}" || true
