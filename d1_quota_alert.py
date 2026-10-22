@@ -1,5 +1,9 @@
 # -*- coding: utf-8 -*-
-"""d1_quota_alert.py —— D1 行读额度巡检（**云端版**，跑在 GitHub Actions）
+"""d1_quota_alert.py —— Cloudflare 免费额度巡检·双指标（**云端版**，跑在 GitHub Actions）
+
+2026-10-22 扩展：补上 Workers 请求指标（免费 100,000/天）。10-21 事故复盘发现 10-15 的
+    双指标扩展只落在本机版，云端版仍单指标 ⇒ 80% 越线发生在北京 23 点（本机已关机）时
+    云端兜底看不见，Workers 103.1% 触顶、Error 1027 全停约 2 小时才由次日补报发现。
 
 为什么要有云端版（2026-09-25 实测的盲区）：
     本机版（工作区 outputs/d1_quota_alert.py）依赖本机常驻巡检。而本机夜间会关机
@@ -31,6 +35,7 @@ import sys
 import urllib.request
 
 DAILY_LIMIT = 5_000_000
+WORKERS_LIMIT = 100_000
 D1_DATABASE_ID = "8f9488d4-867f-406c-8841-0af84cee311e"
 GRAPHQL = "https://api.cloudflare.com/client/v4/graphql"
 WARN_RATIO, CRIT_RATIO = 0.80, 1.00
@@ -46,6 +51,19 @@ query($acc: String!, $start: Date!, $end: Date!, $db: String!) {
         filter: {date_geq: $start, date_leq: $end, databaseId: $db}
         orderBy: [datetimeHour_ASC]
       ) { dimensions { datetimeHour } sum { rowsRead } count }
+    }
+  }
+}
+"""
+
+QUERY_W = """
+query($acc: String!, $start: Time!, $end: Time!) {
+  viewer {
+    accounts(filter: {accountTag: $acc}) {
+      workersInvocationsAdaptive(limit: 10000, filter: {datetime_geq: $start, datetime_leq: $end}) {
+        dimensions { datetimeHour scriptName }
+        sum { requests }
+      }
     }
   }
 }
@@ -114,6 +132,97 @@ def build_text(info: dict, level: str) -> str:
         info["day"], format(rows, ","), format(limit, ","), ratio, eta)
 
 
+def fetch_workers_usage(acc: str, token: str) -> dict:
+    """当日（UTC）Workers 请求累计 + 最近一个完整小时的速率 + 按脚本拆分（元数据查询，不耗额度）。"""
+    now = dt.datetime.now(dt.timezone.utc)
+    today = now.strftime("%Y-%m-%d")
+    body = json.dumps({"query": QUERY_W, "variables": {
+        "acc": acc,
+        "start": today + "T00:00:00Z",
+        "end": now.strftime("%Y-%m-%dT%H:%M:%SZ")}}).encode()
+    req = urllib.request.Request(GRAPHQL, data=body, method="POST", headers={
+        "Authorization": "Bearer " + token, "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        j = json.loads(resp.read().decode("utf-8"))
+    if j.get("errors"):
+        raise RuntimeError("GraphQL(W) errors: " + json.dumps(j["errors"], ensure_ascii=False)[:400])
+    groups = (j.get("data", {}).get("viewer", {}).get("accounts") or [{}])[0].get(
+        "workersInvocationsAdaptive") or []
+    by_script: dict = {}
+    by_hour: dict = {}
+    for g in groups:
+        dim = g.get("dimensions") or {}
+        h = str(dim.get("datetimeHour") or "")
+        sc = str(dim.get("scriptName") or "?")
+        n = int((g.get("sum") or {}).get("requests") or 0)
+        if not h:
+            continue
+        by_script[sc] = by_script.get(sc, 0) + n
+        by_hour[h] = by_hour.get(h, 0) + n
+    day_reqs = sum(n for h, n in by_hour.items() if h[:10] == today)
+    done = sorted((h, n) for h, n in by_hour.items() if h != now.strftime("%Y-%m-%dT%H:00:00Z"))
+    rate, rate_hour = (done[-1][1], done[-1][0]) if done else (0, "")
+    top = sorted(by_script.items(), key=lambda kv: -kv[1])[:3]
+    return {"day": today, "day_reqs": day_reqs, "rate": rate, "rate_hour": rate_hour,
+            "limit": WORKERS_LIMIT, "top": top}
+
+
+def build_text_workers(info: dict, level: str) -> str:
+    reqs, limit = info["day_reqs"], info["limit"]
+    ratio = reqs / limit * 100
+    eta = ""
+    if info.get("rate") and reqs < limit:
+        eta = "\n最近一个完整小时 %s 次 ⇒ 按此速率约 %.1f 小时后触顶。" % (
+            format(info["rate"], ","), (limit - reqs) / info["rate"])
+    elif reqs >= limit:
+        eta = "\n已超出 %s 次，所有 Worker 现已停摆。" % format(reqs - limit, ",")
+    tops = "、".join("%s=%s" % (k, format(v, ",")) for k, v in info.get("top") or [])
+    head = ("🔴【事故】Workers 请求额度已超限" if level == "crit"
+            else "🟠 Workers 请求额度预警（客服工作台数据口）")
+    if level == "crit":
+        tail = ("\n**影响：所有 Worker 停摆（Error 1027）**——数据口 d1.ciacobd0223.dpdns.org 全挂，"
+                "工作台读写不可用（离线模式）、图片不可看不可传、巡检触发器停摆。"
+                "\n**恢复：北京时间次日 08:00**（UTC 午夜自动重置，免费版无法手动重置）。")
+    else:
+        tail = ("\n触顶后所有 Worker 停摆（Error 1027）：工作台数据读写、图片、巡检触发全部不可用。"
+                "\n建议：现在关闭多余的工作台/手册标签页（每个打开的页面都会持续产生请求）。")
+    return ("%s\n\nUTC 日 %s 已用 %s / %s 请求 ＝ %.1f%%%s\n%s"
+            "\n（按脚本：%s）\n数据来源：Cloudflare GraphQL Analytics（云端每小时巡检，与本机是否开机无关）") % (
+        head, info["day"], format(reqs, ","), format(limit, ","), ratio, eta, tail, tops or "?")
+
+
+def run_workers_check(acc: str, token: str, dry: bool, force: bool, st: dict) -> tuple[int, dict]:
+    """【Workers 请求】单指标检查（与 D1 检查同构；状态键 w_day/w_level）。返回 (退出码, 新状态)。"""
+    try:
+        info = fetch_workers_usage(acc, token)
+    except Exception as e:  # noqa: BLE001
+        print("! Workers 取数失败（不影响 D1 检查）：%s" % str(e)[:200])
+        return 0, st
+    level = decide(info["day_reqs"], info["limit"])
+    print("Workers ｜ UTC 日 %s 已用 %s / %s 次 = %.1f%% ｜ 速率 %s 次/时（%s）｜ Top：%s" % (
+        info["day"], format(info["day_reqs"], ","), format(info["limit"], ","),
+        info["day_reqs"] / info["limit"] * 100, format(info["rate"], ","),
+        info["rate_hour"] or "?", "、".join("%s=%s" % (k, format(v, ",")) for k, v in info["top"]) or "?"))
+    if level is None:
+        print("→ Workers 未跨阈值（<80%），不告警")
+        return 0, st
+    prev = st.get("w_level") if st.get("w_day") == info["day"] else None
+    if not force and _RANK[level] <= _RANK.get(prev, 0):
+        print("→ Workers 今日已按 %s 级告警过（幂等跳过）" % prev)
+        return 0, st
+    text = build_text_workers(info, level)
+    if dry:
+        print("--- Workers 告警内容（dry-run，未发送）---")
+        print(text)
+        return 0, st
+    ok = send(text)
+    print("→ Workers %s 级告警发送%s" % (level, "成功" if ok else "失败"))
+    if ok:
+        st.update({"w_day": info["day"], "w_level": level, "reqs": info["day_reqs"],
+                   "w_sent_at": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")})
+    return 0, st
+
+
 def _state_path() -> str:
     d = os.environ.get("QUOTA_STATE_DIR") or ".quota_state"
     return os.path.join(d, "state.json")
@@ -164,16 +273,20 @@ def main() -> int:
         print("! 缺少 CF_ACCOUNT_ID / CF_API_TOKEN —— 无法巡检（不视为失败）")
         return 0
 
+    st = load_state()
+    code_w, st = run_workers_check(acc, token, dry, a.force, st)
+    save_state(st)
+
     info = fetch_usage(acc, token)
     level = decide(info["day_rows"], info["limit"])
     print("UTC 日 %s 已用 %s / %s 行 = %.1f%% ｜ 速率 %s 行/时（%s）" % (
         info["day"], format(info["day_rows"], ","), format(info["limit"], ","),
         info["day_rows"] / info["limit"] * 100, format(info["rate"], ","), info["rate_hour"] or "?"))
     if level is None:
-        print("→ 未跨阈值（<80%%），不告警")
-        return 0
+        print("→ D1 未跨阈值（<80%%），不告警")
+        return code_w
 
-    st = load_state()
+
     prev = st.get("level") if st.get("day") == info["day"] else None
     if not a.force and _RANK[level] <= _RANK.get(prev, 0):
         print("→ 今日已按 %s 级告警过（幂等跳过）" % prev)
