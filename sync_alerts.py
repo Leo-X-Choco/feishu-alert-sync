@@ -107,6 +107,23 @@ def build_alert_text(stage, cause, job_url=None):
     return "\n".join(lines)
 
 
+# 脚本主告警发送成功后落此标记文件，供 workflow 的兜底 job（notify-failure）
+# 判断是否需要再发兜底提醒（脚本已发成功 → 兜底跳过，避免双告警刷屏）。
+ALERT_SENT_MARKER = "alert_sent.marker"
+
+
+def send_alert_and_mark(webhook, text):
+    """发送告警；成功则写标记文件（写失败不影响主流程，最多多一条兜底告警）。"""
+    ok = send_alert(webhook, text)
+    if ok:
+        try:
+            with open(ALERT_SENT_MARKER, "w", encoding="utf-8") as f:
+                f.write(now_str())
+        except OSError as e:
+            print(f"[WARN] 写告警标记文件失败: {e}")
+    return ok
+
+
 # 飞书服务端瞬时错误码（值得退避重试）：
 #   1255002  Bitable 服务端内部错误 "Something went wrong"（如 2026-09-04 12:59 那次读表失败）
 #   1254607  Bitable "Data not ready, please try again later"（大表读取时数据未就绪，2026-09-10 11:36 两次触发）
@@ -127,7 +144,8 @@ def _extract_lark_code(body_text):
 def http_json(method, url, headers=None, payload=None):
     """发起 HTTP 请求，返回解析后的 JSON。
     读超时/网络错误、飞书瞬时错误码（RETRYABLE_LARK_CODES，含以 HTTP 4xx/5xx 形态
-    返回但 body 内 code 命中的情形）按 RETRY_BACKOFF_SECONDS 退避重试。
+    返回但 body 内 code 命中的情形）、查询类请求（GET）遇服务端 5xx，
+    按 RETRY_BACKOFF_SECONDS 退避重试。
     """
     req = urllib.request.Request(url, method=method)
     req.add_header("Content-Type", "application/json; charset=utf-8")
@@ -145,8 +163,14 @@ def http_json(method, url, headers=None, payload=None):
                 result = json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             body = e.read().decode("utf-8", "ignore")
+            # 服务端 5xx：查询类请求（GET，只读）自动重试——如 2026-10-21 14:00 拉群消息
+            # 返回 HTTP 500/code 2200 Internal Error（飞书侧瞬时故障），当时未重试直接告警；
+            # 写接口（POST 等）遇 5xx 不重试，避免服务端可能已落库造成重复写入
+            if method == "GET" and e.code >= 500:
+                last_err = LarkError(f"HTTP {e.code}: {body[:500]}")
+                retryable_hit = True
             # HTTP 4xx/5xx 但 body 内 code 命中瞬时错误码（如 1254607 走 HTTP 400）→ 可重试
-            if _extract_lark_code(body) in RETRYABLE_LARK_CODES:
+            elif _extract_lark_code(body) in RETRYABLE_LARK_CODES:
                 last_err = LarkError(f"HTTP {e.code}: {body[:500]}")
                 retryable_hit = True
             else:
@@ -526,7 +550,7 @@ def main():
         msg = f"缺少环境变量: {', '.join(missing)}"
         print(f"[FATAL] {msg}")
         if webhook:
-            send_alert(webhook, build_alert_text("环境检查", msg))
+            send_alert_and_mark(webhook, build_alert_text("环境检查", msg))
         sys.exit(1)
 
     try:
@@ -619,11 +643,11 @@ if __name__ == "__main__":
         text = build_alert_text(e.stage, e.cause, job_url)
         print(f"[FATAL] {text}")
         if webhook:
-            send_alert(webhook, text)
+            send_alert_and_mark(webhook, text)
         sys.exit(1)
     except Exception as e:  # 未预期异常（网络、编码等）
         text = build_alert_text("未预期异常", e, job_url)
         print(f"[FATAL] {text}")
         if webhook:
-            send_alert(webhook, text)
+            send_alert_and_mark(webhook, text)
         sys.exit(1)

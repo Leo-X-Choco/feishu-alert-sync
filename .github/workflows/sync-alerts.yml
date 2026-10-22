@@ -30,6 +30,9 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    outputs:
+      # 脚本主告警是否已发送成功（供 notify-failure 去重，避免双告警刷屏）
+      alert_sent: ${{ steps.alert_marker.outputs.sent }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -50,11 +53,23 @@ jobs:
           LOOKBACK_HOURS: "48"
         run: python sync_alerts.py
 
-  # 兜底告警：sync 失败时（包括脚本整体崩溃、超时等未触发脚本内告警的场景），
-  # 由 GitHub Actions 直接发飞书群机器人消息
+      # 脚本失败退出后仍需检查标记（send_alert 成功才会写 alert_sent.marker）
+      - name: Check alert marker
+        if: always()
+        id: alert_marker
+        run: |
+          if [ -f alert_sent.marker ]; then
+            echo "sent=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "sent=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # 兜底告警：sync 失败且脚本主告警未发成功时（脚本崩溃、超时、webhook 发送失败等
+  # 未触发脚本内告警的场景），由 GitHub Actions 直接发飞书群机器人消息；
+  # 脚本已发过主告警（alert_sent=true）则跳过，避免同一故障群里收到两条提醒
   notify-failure:
     needs: sync
-    if: failure()
+    if: failure() && needs.sync.outputs.alert_sent != 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Send Feishu failure alert
