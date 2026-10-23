@@ -61,11 +61,13 @@ push, alerts = duty.pushable_members("2026-09-19", MEMBERS, rows=REAL_0919)
 t("R1 09-19 真实数据：仅李玉婷可推送", push == {"李玉婷"}, "pushable=%s" % sorted(push))
 t("R2 09-19 事假成员（方佳莹）不再可推送", "方佳莹" not in push)
 t("R3 09-19 休息成员均不可推送", not ({"许磊", "李燕芳", "胡镭"} & push))
-t("R4 09-19 无重复行/名单外告警", alerts == [], alerts)
+t("R4 09-19 名单外成员（方佳莹）恰好产出一条告警",
+  len(alerts) == 1 and "方佳莹" in alerts[0], alerts)
 
 # 旧口径对照（证明修复前的行为）
 old_off = {r["member"] for r in REAL_0919 if r["status"] in ("休息", "请假", "节假日")}
-old_on_duty = [m for m in MEMBERS if m not in old_off]
+OLD_MEMBERS_0919 = MEMBERS + ["方佳莹"]   # 09-19 当时的名单仍含她
+old_on_duty = [m for m in OLD_MEMBERS_0919 if m not in old_off]
 t("R5 旧黑名单口径确实会把方佳莹判为在岗（复现事故根因）",
   "方佳莹" in old_on_duty, "old_on_duty=%s" % old_on_duty)
 
@@ -77,14 +79,14 @@ for status in ("事假", "病假", "年假", "调休", "休息", "法定休息",
     t("S 状态「%s」不可推送" % status, "方佳莹" not in p, "pushable=%s" % sorted(p))
 
 for status in ("正常上班", "加班", "节假日加班"):
-    p, _a = duty.pushable_members("2026-09-22", MEMBERS, rows=[row("方佳莹", status)])
+    p, _a = duty.pushable_members("2026-09-22", MEMBERS + ["方佳莹"], rows=[row("方佳莹", status)])
     t("S 状态「%s」可推送" % status, "方佳莹" in p, "pushable=%s" % sorted(p))
 
 p, _a = duty.pushable_members("2026-09-22", MEMBERS, rows=[row("方佳莹", "团建外出")])
 t("S 状态「团建外出」计入出勤但不推送", "方佳莹" not in p, "pushable=%s" % sorted(p))
 
 # 历史状态名归一
-p, _a = duty.pushable_members("2026-09-22", MEMBERS, rows=[row("方佳莹", "在岗")])
+p, _a = duty.pushable_members("2026-09-22", MEMBERS + ["方佳莹"], rows=[row("方佳莹", "在岗")])
 t("S 遗留状态「在岗」→ 正常上班（可推送）", "方佳莹" in p)
 p, _a = duty.pushable_members("2026-09-22", MEMBERS, rows=[row("方佳莹", "法定节假日")])
 t("S 遗留状态「法定节假日」→ 法定休息（不推送）", "方佳莹" not in p)
@@ -108,14 +110,14 @@ p, _a = duty.pushable_members("2026-09-20", MEMBERS, rows=[])    # 周日，但�
 t("C 调休上班日（09-20 周日）无记录 → 全员可推送", p == set(MEMBERS), sorted(p))
 
 # 法定假日标注为「正常上班」→ 照常推送并提示核对
-p, a = duty.pushable_members("2026-10-01", MEMBERS, rows=[row("方佳莹", "正常上班")])
+p, a = duty.pushable_members("2026-10-01", MEMBERS + ["方佳莹"], rows=[row("方佳莹", "正常上班")])
 t("C 法定假日标「正常上班」仍推送", "方佳莹" in p)
 t("C 法定假日标「正常上班」给出核对提醒", any("节假日加班" in x for x in a), a)
 
 # ---------------------------------------------------------------------------
 # 4) 重复行 / 名单外成员
 # ---------------------------------------------------------------------------
-p, a = duty.pushable_members("2026-09-22", MEMBERS,
+p, a = duty.pushable_members("2026-09-22", MEMBERS + ["方佳莹"],
                              rows=[row("方佳莹", "事假"), row("方佳莹", "加班")])
 t("D 同人同日多条取最后一条（事假→加班 = 可推送）", "方佳莹" in p, sorted(p))
 t("D 重复行产出告警", any("重复排班记录" in x for x in a), a)
