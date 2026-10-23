@@ -82,7 +82,9 @@ def run_case(dry: bool) -> tuple[int, str]:
 
 def main() -> int:
     ok = True
-    fang = config.OPEN_IDS["方佳莹"]
+    # v92：方佳莹已移出 config.MEMBERS/OPEN_IDS——「事假样本」的 open_id 用历史字面量
+    # （断言语义不变：事假成员的 ou 不应出现在发送名单里）。
+    fang = "ou_9e78dc404bfb1d536b1cf6d34615763d"
     li = config.OPEN_IDS["李玉婷"]
 
     # ---- 场景 1：正常发送 ----

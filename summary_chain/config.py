@@ -20,7 +20,7 @@ EXAM_TABLE = os.environ.get("FEISHU_EXAM_TABLE", "tbl013TV9PFTT1Or")
 DAILY_BITABLE_TOKEN = os.environ.get("FEISHU_DAILY_BITABLE", "CixAbQERqaOifistxhIcdTkcnue")
 DAILY_BITABLE_TABLE = os.environ.get("FEISHU_DAILY_BITABLE_TABLE", "tbl7oMLDrYaWRGwd")
 DAILY_FIELD_DATE = "时间"            # datetime，行日期
-DAILY_FIELD_NAME = "姓名"            # select（李燕芳/胡镭/李玉婷/方佳莹）
+DAILY_FIELD_NAME = "姓名"            # select（李燕芳/胡镭/李玉婷）
 DAILY_FIELD_WORK = "今日工作情况"     # text，小结写入目标
 
 # 飞书日报文档与提醒群
@@ -31,13 +31,14 @@ ALERT_WEBHOOK = os.environ.get("FEISHU_ALERT_WEBHOOK", "")
 #   主通道（send_group_message）；无需应用机器人入群与 im 发消息权限。
 
 # 成员与 open_id（企业租户内固定）
-MEMBERS = ["许磊", "李燕芳", "胡镭", "李玉婷", "方佳莹"]
+# v92（2026-10-23）：方佳莹已移出小组成员名单——云端提醒（小结首轮/末轮、
+# 通用任务提醒）不再 @ 她；与工作台页面/快照同源（4 人）。
+MEMBERS = ["许磊", "李燕芳", "胡镭", "李玉婷"]
 OPEN_IDS = {
     "许磊": "ou_716ef6bab4627dd72d16a05debf42ca9",
     "李燕芳": "ou_a3789ac8629f6002adf72686996e609c",
     "胡镭": "ou_aa7d598d3a0141410c7dbfbfdff52727",
     "李玉婷": "ou_5564e4682e3352ecab51d9d2ba432dee",
-    "方佳莹": "ou_9e78dc404bfb1d536b1cf6d34615763d",
 }
 NAME_ALIASES = {"Emily": "李玉婷"}
 
