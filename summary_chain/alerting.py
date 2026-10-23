@@ -142,6 +142,28 @@ def workflow_runs(workflow_file: str, since_iso: str, *, repo: str,
     return out
 
 
+def workflow_runs_recent(workflow_file: str, *, repo: str, token: str,
+                         per_page: int = 15) -> list[dict]:
+    """最近 N 次运行（不带 created 过滤）—— created 过滤视图异常时的交叉验证兜底。
+
+    🔴 2026-10-22 实测：runs 列表 API 存在瞬时「按 created 过滤返回空」的异常
+    （窗口内明明有 7.7 小时前的成功运行，带过滤查询两次均返回空列表，不带过滤
+    即可查到）——导致看门狗把「查询异常」误判成「未触发」而误发告警。
+    修法：带过滤查询为空时，改用全量最近列表在本地按 since 过滤复核。
+    """
+    url = (f"https://api.github.com/repos/{repo}/actions/workflows/"
+           f"{workflow_file}/runs?" + urlencode({"per_page": str(per_page)}))
+    data = _gh_get(url, token)
+    out = []
+    for r in data.get("workflow_runs") or []:
+        out.append({"id": r.get("id"),
+                    "status": r.get("status"),
+                    "conclusion": r.get("conclusion"),
+                    "created_at": r.get("created_at"),
+                    "html_url": r.get("html_url")})
+    return out
+
+
 def _verdict(runs: list[dict]) -> tuple[str, str]:
     """判定单个 workflow 当日状态 → (状态, 说明)。
 
@@ -170,6 +192,12 @@ def collect_status(iso_date: str, *, repo: str, token: str) -> list[dict]:
     for wf, label in EXPECTED_WORKFLOWS:
         try:
             runs = workflow_runs(wf, since, repo=repo, token=token)
+            if not runs:
+                # 🔴 v92：created 过滤视图可能瞬时返回空（2026-10-22 实测误报根因）
+                # ——用「最近运行全量列表」本地按 since 复核一遍再定性。
+                recent = workflow_runs_recent(wf, repo=repo, token=token)
+                runs = [r for r in recent
+                        if str(r.get("created_at") or "") >= since]
             state, why = _verdict(runs)
             rows.append({"workflow": wf, "label": label, "state": state,
                          "why": why, "runs": runs})
