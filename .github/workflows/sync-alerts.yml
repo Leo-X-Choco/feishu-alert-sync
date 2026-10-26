@@ -1,5 +1,17 @@
 name: sync-feishu-alerts
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 【暂停机制说明】（2026-10-26 增设）
+#   仓库变量 SYNC_ALERTS_PAUSED = true 时，本 workflow 的 sync job 直接被跳过：
+#     · 外部调度器（CF Worker patrol-trigger / 本机 patrol_daemon）照常 dispatch，
+#       API 返回 204、run 结论为 success ⇒ 不会触发 patrol-trigger 的失败告警；
+#     · 不拉群消息、不读表、不写表 ⇒ 零新增数据、零写入。
+#   恢复：把变量改为 false 或删除该变量即可，**无需改代码、无需改调度器**。
+#   临时跑一次（补数据）：变量改 false → Actions 页面 Run workflow → 改回 true。
+#   设计原因：直接「Disable workflow」会让 dispatch 返回 404，patrol-trigger 会按
+#   失败逻辑每 30 分钟往飞书群发一条告警（刷屏），故改用本方案。
+# ─────────────────────────────────────────────────────────────────────────────
+
 # 触发方式：
 # 1. 外部调度器按点调 workflow_dispatch API（2026-09-22 起的主通道）：
 #    · Cloudflare Worker `patrol-trigger`（主通道，每 30 分钟）
@@ -28,6 +40,8 @@ permissions:
 
 jobs:
   sync:
+    # 🔴 暂停开关（2026-10-26）：变量未设置或为 false 时正常运行；为 'true' 时整条链路空转。
+    if: ${{ vars.SYNC_ALERTS_PAUSED != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
