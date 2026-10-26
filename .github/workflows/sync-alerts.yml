@@ -4,7 +4,10 @@ name: sync-feishu-alerts
 # 【暂停机制说明】（2026-10-26 增设）
 #   仓库变量 SYNC_ALERTS_PAUSED = true 时，本 workflow 的 sync job 直接被跳过：
 #     · 外部调度器（CF Worker patrol-trigger / 本机 patrol_daemon）照常 dispatch，
-#       API 返回 204、run 结论为 success ⇒ 不会触发 patrol-trigger 的失败告警；
+#       API 仍返回 204；run 结论为 **skipped**（没有任何失败 job）⇒ 不触发失败告警；
+#     · 🔴 关键前提：两个调度器只判断「该 workflow 最近有没有 run」，**不看 conclusion**，
+#       所以 skipped 不会被误判成「没跑」而重复 dispatch，也不会报异常。
+#       （实测 2026-10-26 18:23 run 40306857130：conclusion=skipped，job 全 skipped）
 #     · 不拉群消息、不读表、不写表 ⇒ 零新增数据、零写入。
 #   恢复：把变量改为 false 或删除该变量即可，**无需改代码、无需改调度器**。
 #   临时跑一次（补数据）：变量改 false → Actions 页面 Run workflow → 改回 true。
