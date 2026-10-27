@@ -34,6 +34,12 @@ jobs:
       # CF_API_TOKEN 只需「账号 Analytics 只读」——最小权限，勿复用可写 token
       CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
       CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+      # 🔴 2026-10-26 起只发「许磊的智能助手」单聊，不再发「海外客服三组」群
+      FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+      FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+      WB_DM_OPEN_ID: ${{ secrets.WB_DM_OPEN_ID }}
+      # 群通道仅在显式置 1 时才作为兜底（默认关闭）
+      FEISHU_GROUP_FALLBACK: "0"
       FEISHU_ALERT_WEBHOOK: ${{ secrets.FEISHU_ALERT_WEBHOOK }}
       QUOTA_STATE_DIR: .quota_state
       QUOTA_DRY_RUN: ${{ inputs.dry_run == true && '1' || '' }}
@@ -58,7 +64,6 @@ jobs:
           key: d1-quota-${{ github.run_id }}
       - name: Alert on failure
         if: failure()
+        # 2026-10-26：原来用 curl 打群 webhook，改为发「许磊的智能助手」单聊
         run: |
-          curl -sS -X POST "$FEISHU_ALERT_WEBHOOK" \
-            -H "Content-Type: application/json" \
-            -d "{\"msg_type\":\"text\",\"content\":{\"text\":\"🚨【云端 D1 额度巡检自身失败】\n日志：https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}}" || true
+          python -c "import d1_quota_alert as q; print(q.send('🚨【云端额度巡检自身失败】\n日志：https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'))" || true

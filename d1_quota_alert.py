@@ -14,12 +14,18 @@
     · 状态存 `QUOTA_STATE_DIR/state.json`（workflow 用 actions/cache 跨运行持久化，
       因为 GitHub Actions 每次运行都是新容器）；
     · 只做「当日判定 + 同级别/升级」这一件事（云端每小时都会跑，不需要「开机补报」）；
-    · 文案用纯文本（走 FEISHU_ALERT_WEBHOOK，msg_type=text），不依赖交互卡片。
+    · 文案用纯文本（走飞书单聊 API，msg_type=text），不依赖交互卡片。
+    · 🔴 2026-10-26 起**只发「许磊的智能助手」单聊**，不再发「海外客服三组」群
+      （原 `FEISHU_ALERT_WEBHOOK` 群通道降级为可选兜底，默认关闭）。
 
 环境变量（全部来自 GitHub Secrets/Variables）：
     CF_ACCOUNT_ID          必需  Cloudflare 账号 ID
     CF_API_TOKEN           必需  **只需 Zone/Account Analytics 读**权限的 token（最小权限）
-    FEISHU_ALERT_WEBHOOK   必需  告警群 Webhook
+    FEISHU_APP_ID          必需  「许磊的智能助手」自建应用 App ID
+    FEISHU_APP_SECRET      必需  同上 App Secret
+    WB_DM_OPEN_ID          可选  收件人 open_id，默认许磊（ou_716ef6…）
+    FEISHU_ALERT_WEBHOOK   可选  群 webhook（仅在 FEISHU_GROUP_FALLBACK=1 时才用）
+    FEISHU_GROUP_FALLBACK  可选  1 = 个人通道失败时回落群；默认 0（不回落）
     QUOTA_STATE_DIR        可选  状态目录，默认 .quota_state
     QUOTA_DRY_RUN          可选  1 = 只打印不发送
 
@@ -243,7 +249,73 @@ def save_state(st: dict) -> None:
         json.dump(st, fh, ensure_ascii=False, indent=2)
 
 
+FEISHU_HOST = "https://open.feishu.cn"
+# 许磊本人 open_id（2026-10-02 取自 lark-cli auth status 实测值）
+# 🔴 必须用 `or` 兜底：GitHub Secrets 里若没配 WB_DM_OPEN_ID，env 会存在但为**空串**
+#    ⇒ 直接 os.environ.get(k, default) 拿到的是 ""，消息会发给空收件人而失败。
+DM_OPEN_ID = (os.environ.get("WB_DM_OPEN_ID") or "").strip() \
+    or "ou_716ef6bab4627dd72d16a05debf42ca9"
+
+
+def _feishu_token(app_id: str, app_secret: str) -> str:
+    body = json.dumps({"app_id": app_id, "app_secret": app_secret}).encode("utf-8")
+    req = urllib.request.Request(
+        FEISHU_HOST + "/open-apis/auth/v3/tenant_access_token/internal",
+        data=body, method="POST", headers={"Content-Type": "application/json; charset=utf-8"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        d = json.loads(r.read().decode("utf-8") or "{}")
+    if d.get("code") != 0:
+        raise RuntimeError("取 tenant_access_token 失败: "
+                           + json.dumps(d, ensure_ascii=False)[:220])
+    return d["tenant_access_token"]
+
+
+def send_dm(text: str) -> tuple[bool, str]:
+    """给「许磊的智能助手」单聊发一条纯文本。返回 (是否成功, 说明)。"""
+    app_id = (os.environ.get("FEISHU_APP_ID") or "").strip()
+    app_secret = (os.environ.get("FEISHU_APP_SECRET") or "").strip()
+    if not app_id or not app_secret:
+        return False, "未配置 FEISHU_APP_ID / FEISHU_APP_SECRET"
+    try:
+        tok = _feishu_token(app_id, app_secret)
+        body = json.dumps({
+            "receive_id": DM_OPEN_ID,
+            "msg_type": "text",
+            "content": json.dumps({"text": text}, ensure_ascii=False),
+        }, ensure_ascii=False).encode("utf-8")
+        req = urllib.request.Request(
+            FEISHU_HOST + "/open-apis/im/v1/messages?receive_id_type=open_id",
+            data=body, method="POST",
+            headers={"Authorization": "Bearer " + tok,
+                     "Content-Type": "application/json; charset=utf-8"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            d = json.loads(r.read().decode("utf-8") or "{}")
+        if d.get("code") != 0:
+            return False, "单聊返回异常: " + json.dumps(d, ensure_ascii=False)[:220]
+        mid = ((d.get("data") or {}).get("message_id")) or "sent"
+        return True, str(mid)
+    except Exception as e:  # noqa: BLE001
+        return False, "%s: %s" % (type(e).__name__, str(e)[:200])
+
+
 def send(text: str) -> bool:
+    """发送告警：**只发「许磊的智能助手」单聊**（2026-10-26 老大要求）。
+
+    实现：企业自建应用 `FEISHU_APP_ID/SECRET` 取 tenant_access_token
+          → `im/v1/messages` 以 open_id 发给许磊本人。
+    飞书里这条消息就出现在「许磊的智能助手」这个机器人的对话窗口里。
+    🔴 「海外客服三组」群已**不再发送**（含 webhook 兜底）；
+       要临时恢复，设 `FEISHU_GROUP_FALLBACK=1`。
+    """
+    ok, note = send_dm(text)
+    print("  → 个人单聊（许磊的智能助手）：%s" % ("成功 " + note if ok else "失败 " + note))
+    if ok:
+        return True
+
+    if os.environ.get("FEISHU_GROUP_FALLBACK", "0") not in ("1", "true", "yes"):
+        print("  ! 群兜底已关闭（默认）⇒ 本条只留在 Actions 日志里，不发任何群")
+        return False
+
     hook = os.environ.get("FEISHU_ALERT_WEBHOOK", "").strip()
     if not hook:
         print("! 未配置 FEISHU_ALERT_WEBHOOK，跳过发送")
@@ -253,10 +325,10 @@ def send(text: str) -> bool:
                                  headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=30) as r:
         d = json.loads(r.read().decode("utf-8") or "{}")
-    ok = d.get("code", d.get("StatusCode", 0)) == 0
-    if not ok:
+    ok2 = d.get("code", d.get("StatusCode", 0)) == 0
+    if not ok2:
         print("! Webhook 返回异常：", json.dumps(d, ensure_ascii=False)[:200])
-    return ok
+    return ok2
 
 
 def main() -> int:
