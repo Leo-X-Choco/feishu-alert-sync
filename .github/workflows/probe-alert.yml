@@ -1,9 +1,9 @@
 name: Manual Probe Alert
 
 # 目的：手册可用性探针（patrol-trigger Worker 每 5 分钟一次）的告警/恢复通知通道。
-#   2026-11-08 整改：告警从「海外客服三组」群 webhook 改为「许磊的智能助手」单聊（与额度预警同通道），
-#   触发阈值从「连续 2 次（10 分钟）」提高到「连续 6 次（30 分钟持续不可用）」。
-#   11-08 晚修复：heredoc PYEOF 顶格 + 内容去前导缩进（原版 PYEOF 带空格导致 heredoc 不闭合，run 失败）。
+#   2026-11-08 整改：告警改发「许磊的智能助手」单聊（send 逻辑在 probe_dm.py，open_id 已硬编码），
+#   触发阈值连续 6 次（30 分钟持续不可用）；探针超时 25 秒。
+#   v2 修复：弃用 heredoc（缩进导致 IndentationError），改用仓库脚本 probe_dm.py。
 
 on:
   workflow_dispatch:
@@ -37,62 +37,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
-      FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
       FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
-      WB_DM_OPEN_ID: ${{ secrets.WB_DM_OPEN_ID }}
       ALERT_TYPE: ${{ inputs.alert_type }}
       STREAK: ${{ inputs.streak }}
       DUR_MIN: ${{ inputs.dur_min }}
       DETAIL: ${{ inputs.detail }}
     steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
       - name: Send DM to XuLei Assistant
-        run: |
-          python - <<'PYEOF'
-          import json, os, urllib.request
-
-          app_id = os.environ["FEISHU_APP_ID"]
-          app_secret = os.environ["FEISHU_APP_SECRET"]
-          open_id = os.environ["WB_DM_OPEN_ID"]
-          alert_type = os.environ.get("ALERT_TYPE", "test")
-          streak = os.environ.get("STREAK", "0")
-          dur = os.environ.get("DUR_MIN", "0")
-          detail = os.environ.get("DETAIL", "").strip()
-
-          rq = urllib.request.Request(
-          "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
-          data=json.dumps({"app_id": app_id, "app_secret": app_secret}).encode(),
-          headers={"Content-Type": "application/json"})
-          tk = json.load(urllib.request.urlopen(rq, timeout=15))
-          token = tk.get("tenant_access_token")
-          if not token:
-          raise SystemExit("no tenant_access_token: " + json.dumps(tk)[:200])
-
-          if alert_type == "alert":
-          text = ("🚨【手册探针】手册网站持续打不开：已连续 " + streak + " 次探活失败（约 " + dur + " 分钟）。"
-          + ("失败形态：" + detail + "。" if detail else "")
-          + "话术数据不受影响（独立存储）。如果影响同事使用请等几分钟再试，恢复后会再发一条通知。")
-          elif alert_type == "recover":
-          text = ("✅【手册探针】已恢复：此前连续失败 " + streak + " 次（约 " + dur + " 分钟），"
-          "手册网站现在能正常打开了。")
-          else:
-          text = "🧪【手册探针】通道测试：这是一条测试消息。看到它说明「许磊的智能助手」单聊告警通道正常（2026-11-08 整改上线）。"
-
-          body = json.dumps({
-          "receive_id": open_id,
-          "msg_type": "text",
-          "content": json.dumps({"text": text}, ensure_ascii=False),
-          }).encode()
-          rq2 = urllib.request.Request(
-          "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=open_id",
-          data=body,
-          headers={"Content-Type": "application/json", "Authorization": "Bearer " + token})
-          resp = json.load(urllib.request.urlopen(rq2, timeout=15))
-          code = resp.get("code")
-          print("send result code=", code, "msg=", resp.get("msg"))
-          if code != 0:
-          raise SystemExit("send failed: " + json.dumps(resp)[:300])
-          print("DM sent OK")
-          PYEOF
+        run: python probe_dm.py "$ALERT_TYPE" "$STREAK" "$DUR_MIN" "$DETAIL"
       - name: Note on failure
         if: failure()
-        run: echo "probe-alert send failed — check FEISHU secrets"
+        run: echo "probe-alert send failed — check FEISHU_APP_SECRET / probe_dm.py"
