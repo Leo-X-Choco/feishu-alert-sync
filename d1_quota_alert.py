@@ -173,6 +173,23 @@ def fetch_workers_usage(acc: str, token: str) -> dict:
             "limit": WORKERS_LIMIT, "top": top}
 
 
+def decide_projected(day_reqs: int, rate: int, limit: int = WORKERS_LIMIT):
+    """v2 增速外推（2026-11-09）：CF 用量数据延迟 3~4 小时，按
+    「当前已用 + 最近一小时速率 × 剩余小时」预估当日终值再判定
+    （外推 warn=85%、crit=100%，比实时阈值更早触发，抵消延迟漏报）。
+    返回 (level, projected)。"""
+    try:
+        now_h = int(dt.datetime.now(dt.timezone.utc).strftime("%H"))
+    except Exception:
+        return None, day_reqs
+    remaining = max(0, 24 - now_h)
+    projected = day_reqs + max(0, int(rate or 0)) * remaining
+    if limit <= 0:
+        return None, projected
+    r = projected / limit
+    return ("crit" if r >= 1.0 else ("warn" if r >= 0.85 else None)), projected
+
+
 def build_text_workers(info: dict, level: str) -> str:
     reqs, limit = info["day_reqs"], info["limit"]
     ratio = reqs / limit * 100
@@ -193,8 +210,10 @@ def build_text_workers(info: dict, level: str) -> str:
         tail = ("\n触顶后所有 Worker 停摆（Error 1027）：工作台数据读写、图片、巡检触发全部不可用。"
                 "\n建议：现在关闭多余的工作台/手册标签页（每个打开的页面都会持续产生请求）。")
     return ("%s\n\nUTC 日 %s 已用 %s / %s 请求 ＝ %.1f%%%s\n%s"
-            "\n（按脚本：%s）\n数据来源：Cloudflare GraphQL Analytics（云端每小时巡检，与本机是否开机无关）") % (
-        head, info["day"], format(reqs, ","), format(limit, ","), ratio, eta, tail, tops or "?")
+            "\n（按脚本：%s）\n数据来源：Cloudflare GraphQL Analytics（云端每小时巡检，与本机是否开机无关）\n⚠️ 用量数据有 3~4 小时延迟；按最近一小时速率外推，预计今日终值约 %s 次（%s%%）。") % (
+        head, info["day"], format(reqs, ","), format(limit, ","), ratio, eta, tail, tops or "?",
+        format(info.get("_projected", reqs) if isinstance(info, dict) else reqs, ","),
+        "%.1f" % (info.get("_projected", reqs) / limit * 100) if isinstance(info, dict) else "?")
 
 
 def run_workers_check(acc: str, token: str, dry: bool, force: bool, st: dict) -> tuple[int, dict]:
@@ -205,6 +224,11 @@ def run_workers_check(acc: str, token: str, dry: bool, force: bool, st: dict) ->
         print("! Workers 取数失败（不影响 D1 检查）：%s" % str(e)[:200])
         return 0, st
     level = decide(info["day_reqs"], info["limit"])
+    # v2 增速外推：按延迟修正后的预估终值判定（与实时判定取更严格者）
+    level_proj, projected = decide_projected(info["day_reqs"], info.get("rate") or 0, info["limit"])
+    if _RANK.get(level_proj, 0) > _RANK.get(level, 0):
+        level = level_proj
+        info["_projected"] = projected
     print("Workers ｜ UTC 日 %s 已用 %s / %s 次 = %.1f%% ｜ 速率 %s 次/时（%s）｜ Top：%s" % (
         info["day"], format(info["day_reqs"], ","), format(info["limit"], ","),
         info["day_reqs"] / info["limit"] * 100, format(info["rate"], ","),
