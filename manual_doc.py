@@ -29,6 +29,20 @@ def http_json(url, body=None, token=None, method=None):
     return json.load(urllib.request.urlopen(rq, timeout=30))
 
 
+def ordered_blocks(conv):
+    """convert 返回的 blocks 顺序不稳定；必须按 first_level_block_ids 重排。"""
+    data = conv["data"]
+    blocks = data["blocks"]
+    order = data.get("first_level_block_ids") or []
+    if not order:
+        return blocks
+    by_id = {b.get("block_id"): b for b in blocks}
+    ordered = [by_id[i] for i in order if i in by_id]
+    seen = set(order)
+    ordered.extend(b for b in blocks if b.get("block_id") not in seen)
+    return ordered
+
+
 def replace_doc(doc_id, md):
     tk = http_json("https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
                    {"app_id": APP_ID, "app_secret": APP_SECRET})
@@ -60,7 +74,7 @@ def replace_doc(doc_id, md):
     if conv.get("code") != 0:
         print("convert failed:", json.dumps(conv)[:300])
         sys.exit(1)
-    blocks = conv["data"]["blocks"]
+    blocks = ordered_blocks(conv)
     idx = 0
     for start in range(0, len(blocks), 50):
         chunk = blocks[start:start + 50]
@@ -152,7 +166,7 @@ def main():
     if conv.get("code") != 0:
         print("convert failed:", json.dumps(conv, ensure_ascii=False)[:300])
         sys.exit(1)
-    blocks = conv["data"]["blocks"]
+    blocks = ordered_blocks(conv)
     print("blocks:", len(blocks))
 
     # 3. 分批插入（每批 50 个顶层块；index 追加到文档根块）
