@@ -1,0 +1,36 @@
+name: Manual Doc Build
+
+# 目的：客服手册「处理场景总览」飞书文档生成（inputs: title, content_b64=markdown 的 base64）
+# 流程：tenant_token → 创建 docx → markdown convert → 分批插块（见 manual_doc.py）
+
+on:
+  workflow_dispatch:
+    inputs:
+      title:
+        description: "文档标题"
+        required: true
+        type: string
+      content_b64:
+        description: "Markdown 内容（base64 utf-8）"
+        required: true
+        type: string
+
+concurrency:
+  group: manual-doc
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+      DOC_TITLE: ${{ inputs.title }}
+      DOC_CONTENT_B64: ${{ inputs.content_b64 }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Build Feishu doc
+        run: python manual_doc.py "$DOC_TITLE" "$DOC_CONTENT_B64"
