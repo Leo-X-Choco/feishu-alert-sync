@@ -48,7 +48,7 @@ def replace_doc(doc_id, md):
     ids = [b["block_id"] for b in items if (b.get("parent_id") or doc_id) == doc_id]
     if ids:
         del_r = http_json("https://open.feishu.cn/open-apis/docx/v1/documents/" + doc_id +
-                          "/blocks/" + doc_id + "/children/batch_delete", {"start_index": 0, "end_index": len(ids)},
+                          "/blocks/" + doc_id + "/children/batch_delete", {"start_index": 0, "end_index": len(ids) - 1},
                           token=token, method="DELETE")
         if del_r.get("code") != 0:
             print("delete children failed:", json.dumps(del_r)[:300])
