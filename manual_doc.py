@@ -38,15 +38,17 @@ def replace_doc(doc_id, md):
         sys.exit(1)
     # 1. 列出现有顶层子块并删除（全量替换）
     children_url = ("https://open.feishu.cn/open-apis/docx/v1/documents/" + doc_id +
-                    "/blocks/" + doc_id + "/children?document_revision_id=-1&page_size=500")
+                    "/blocks?document_revision_id=-1&page_size=500")
     lst = http_json(children_url, token=token, method="GET")
     if lst.get("code") != 0:
         print("list children failed:", json.dumps(lst)[:300])
         sys.exit(1)
-    ids = [b["block_id"] for b in lst["data"].get("items", [])]
+    # 只取顶层子块（parent 为文档根块）；嵌套块随父块一起被删
+    items = lst["data"].get("items", [])
+    ids = [b["block_id"] for b in items if (b.get("parent_id") or doc_id) == doc_id]
     if ids:
         del_r = http_json("https://open.feishu.cn/open-apis/docx/v1/documents/" + doc_id +
-                          "/blocks/" + doc_id + "/children", {"start_index": 0, "end_index": len(ids)},
+                          "/blocks/" + doc_id + "/children/batch_delete", {"start_index": 0, "end_index": len(ids)},
                           token=token, method="DELETE")
         if del_r.get("code") != 0:
             print("delete children failed:", json.dumps(del_r)[:300])
