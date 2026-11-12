@@ -76,8 +76,30 @@ def replace_doc(doc_id, md):
     print("DOC_URL=https://www.feishu.cn/docx/" + doc_id)
 
 
+def transfer_owner(doc_id):
+    tk = http_json("https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
+                   {"app_id": APP_ID, "app_secret": APP_SECRET})
+    token = tk.get("tenant_access_token")
+    if not token:
+        print("no token")
+        sys.exit(1)
+    r = http_json("https://open.feishu.cn/open-apis/drive/v1/permissions/" + doc_id +
+                  "/members/transfer_owner?type=docx",
+                  {"member_type": "openid", "member_id": OPEN_ID_FALLBACK}, token=token)
+    print("transfer_owner:", json.dumps(r, ensure_ascii=False)[:300])
+    m = http_json("https://open.feishu.cn/open-apis/drive/v1/permissions/" + doc_id +
+                  "/members?type=docx", token=token, method="GET")
+    items = (m.get("data") or {}).get("items") or []
+    owners = [it for it in items if it.get("perm") == "full_access" or it.get("member_type") == "openid"]
+    print("members:", json.dumps(m.get("data") or {}, ensure_ascii=False)[:600])
+    print("TRANSFER_CHECK:", "OK" if any(it.get("member_id") == OPEN_ID_FALLBACK for it in items) else "UNKNOWN")
+
+
 def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else "create"
+    if mode == "transfer_owner":
+        transfer_owner(sys.argv[2])
+        return
     if mode == "replace":
         doc_id = sys.argv[2]
         content_b64 = sys.argv[3]
