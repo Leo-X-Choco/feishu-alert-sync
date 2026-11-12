@@ -29,7 +29,59 @@ def http_json(url, body=None, token=None, method=None):
     return json.load(urllib.request.urlopen(rq, timeout=30))
 
 
+def replace_doc(doc_id, md):
+    tk = http_json("https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
+                   {"app_id": APP_ID, "app_secret": APP_SECRET})
+    token = tk.get("tenant_access_token")
+    if not token:
+        print("no token")
+        sys.exit(1)
+    # 1. 列出现有顶层子块并删除（全量替换）
+    children_url = ("https://open.feishu.cn/open-apis/docx/v1/documents/" + doc_id +
+                    "/blocks/" + doc_id + "/children?document_revision_id=-1&page_size=500")
+    lst = http_json(children_url, token=token, method="GET")
+    if lst.get("code") != 0:
+        print("list children failed:", json.dumps(lst)[:300])
+        sys.exit(1)
+    ids = [b["block_id"] for b in lst["data"].get("items", [])]
+    if ids:
+        del_r = http_json("https://open.feishu.cn/open-apis/docx/v1/documents/" + doc_id +
+                          "/blocks/" + doc_id + "/children", {"start_index": 0, "end_index": len(ids)},
+                          token=token, method="DELETE")
+        if del_r.get("code") != 0:
+            print("delete children failed:", json.dumps(del_r)[:300])
+            sys.exit(1)
+        print("deleted", len(ids), "old blocks")
+    # 2. markdown → blocks 并分批插入
+    conv = http_json("https://open.feishu.cn/open-apis/docx/v1/documents/blocks/convert",
+                     {"content_type": "markdown", "content": md}, token=token)
+    if conv.get("code") != 0:
+        print("convert failed:", json.dumps(conv)[:300])
+        sys.exit(1)
+    blocks = conv["data"]["blocks"]
+    idx = 0
+    for start in range(0, len(blocks), 50):
+        chunk = blocks[start:start + 50]
+        url = ("https://open.feishu.cn/open-apis/docx/v1/documents/" + doc_id +
+               "/blocks/" + doc_id + "/children?document_revision_id=-1")
+        r = http_json(url, {"index": idx, "children": chunk}, token=token)
+        if r.get("code") != 0:
+            print("insert batch failed:", json.dumps(r)[:300])
+            sys.exit(1)
+        idx += len(chunk)
+        print("batch inserted", len(chunk), "(total", idx, ")")
+    print("REPLACE_OK blocks=", idx)
+    print("DOC_URL=https://www.feishu.cn/docx/" + doc_id)
+
+
 def main():
+    mode = sys.argv[1] if len(sys.argv) > 1 else "create"
+    if mode == "replace":
+        doc_id = sys.argv[2]
+        content_b64 = sys.argv[3]
+        md = base64.b64decode(content_b64).decode("utf-8")
+        replace_doc(doc_id, md)
+        return
     title = sys.argv[1] if len(sys.argv) > 1 else "处理场景总览"
     content_b64 = sys.argv[2] if len(sys.argv) > 2 else ""
     md = base64.b64decode(content_b64).decode("utf-8")
