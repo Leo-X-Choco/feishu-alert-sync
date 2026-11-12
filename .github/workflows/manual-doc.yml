@@ -6,9 +6,18 @@ name: Manual Doc Build
 on:
   workflow_dispatch:
     inputs:
-      title:
-        description: "文档标题"
+      mode:
+        description: "create=新建 / replace=全量替换"
         required: true
+        type: string
+        default: "create"
+      doc_id:
+        description: "replace 模式的目标文档 ID"
+        required: false
+        type: string
+      title:
+        description: "文档标题（create 模式用）"
+        required: false
         type: string
       content_b64:
         description: "Markdown 内容（base64 utf-8）"
@@ -26,6 +35,8 @@ jobs:
     env:
       FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
       DOC_TITLE: ${{ inputs.title }}
+      DOC_MODE: ${{ inputs.mode }}
+      DOC_ID: ${{ inputs.doc_id }}
       DOC_CONTENT_B64: ${{ inputs.content_b64 }}
     steps:
       - uses: actions/checkout@v5
@@ -33,4 +44,4 @@ jobs:
         with:
           python-version: "3.11"
       - name: Build Feishu doc
-        run: python manual_doc.py "$DOC_TITLE" "$DOC_CONTENT_B64"
+        run: python manual_doc.py "$DOC_MODE" "$DOC_ID" "$DOC_CONTENT_B64"
