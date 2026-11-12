@@ -95,8 +95,28 @@ def transfer_owner(doc_id):
     print("TRANSFER_CHECK:", "OK" if any(it.get("member_id") == OPEN_ID_FALLBACK for it in items) else "UNKNOWN")
 
 
+def read_doc(doc_id):
+    tk = http_json("https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
+                   {"app_id": APP_ID, "app_secret": APP_SECRET})
+    token = tk.get("tenant_access_token")
+    if not token:
+        print("no token")
+        sys.exit(1)
+    r = http_json("https://open.feishu.cn/open-apis/docx/v1/documents/" + doc_id + "/raw_content",
+                  token=token, method="GET")
+    if r.get("code") != 0:
+        print("read failed:", json.dumps(r)[:300])
+        sys.exit(1)
+    print("RAW_BEGIN")
+    print(r["data"]["content"])
+    print("RAW_END")
+
+
 def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else "create"
+    if mode == "read":
+        read_doc(sys.argv[2])
+        return
     if mode == "transfer_owner":
         transfer_owner(sys.argv[2])
         return
